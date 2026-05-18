@@ -1,7 +1,38 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+
+// ─── 공유 데이터 타입 ─────────────────────────────────
+export interface PiggyRecord {
+  id: string;
+  amount: number;
+  situation: string | null;
+  memo: string;
+  createdAt: string;
+}
+
+export const STORAGE_KEY = "piggy-records";
+
+export function getRecords(): PiggyRecord[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMin = Math.floor((now.getTime() - d.getTime()) / 60000);
+  if (diffMin < 1)  return "방금 전";
+  if (diffMin < 60) return `${diffMin}분 전`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24)   return `${diffH}시간 전`;
+  return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
 
 // ─── 누적 금액별 돼지 상태 ───────────────────────────
 const PIGGY_STATES = [
@@ -37,7 +68,6 @@ function getPiggyState(total: number) {
 
 // ─── 돼지 SVG (상태별) ───────────────────────────────
 function PiggyIllustration({ mood }: { mood: string }) {
-  // 공통 몸통 형태, 표정/색상/장식만 상태별로 변경
   const fills = {
     empty:  { body: "#E5E5EC", cheek: "#D0D0D8", eye: "#999999", bg: "#F7F7F7" },
     hungry: { body: "#F5C8D4", cheek: "#EBA8BB", eye: "#111111", bg: "#FFF5F8" },
@@ -45,9 +75,9 @@ function PiggyIllustration({ mood }: { mood: string }) {
     rich:   { body: "#FFD700", cheek: "#FFC000", eye: "#111111", bg: "#FFFBE6" },
   }[mood] ?? { body: "#E5E5EC", cheek: "#D0D0D8", eye: "#999999", bg: "#F7F7F7" };
 
-  const isRich   = mood === "rich";
-  const isHappy  = mood === "happy" || mood === "rich";
-  const isEmpty  = mood === "empty";
+  const isRich  = mood === "rich";
+  const isHappy = mood === "happy" || mood === "rich";
+  const isEmpty = mood === "empty";
 
   return (
     <div
@@ -55,14 +85,7 @@ function PiggyIllustration({ mood }: { mood: string }) {
       style={{ background: fills.bg }}
       aria-label="돼지저금통 캐릭터 (3D 에셋 삽입 예정)"
     >
-      {/* 3D 에셋 삽입 예정 영역 */}
-      <svg
-        width="140" height="140"
-        viewBox="0 0 140 140"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        {/* 왕관 (rich) */}
+      <svg width="140" height="140" viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg">
         {isRich && (
           <g>
             <polygon points="42,42 52,28 62,38 72,24 82,38 92,28 100,42"
@@ -70,25 +93,14 @@ function PiggyIllustration({ mood }: { mood: string }) {
             <rect x="40" y="40" width="62" height="8" rx="3" fill="#FFD700" stroke="#F0A800" strokeWidth="1"/>
           </g>
         )}
-
-        {/* 귀 */}
         <ellipse cx="36" cy="58" rx="14" ry="16" fill={fills.body} />
         <ellipse cx="36" cy="59" rx="8"  ry="10" fill={fills.cheek} opacity="0.6" />
         <ellipse cx="106" cy="58" rx="14" ry="16" fill={fills.body} />
         <ellipse cx="106" cy="59" rx="8"  ry="10" fill={fills.cheek} opacity="0.6" />
-
-        {/* 몸통 */}
         <ellipse cx="71" cy="90" rx="48" ry="44" fill={fills.body} />
-
-        {/* 하이라이트 */}
-        <ellipse cx="55" cy="72" rx="12" ry="7"
-          fill="white" opacity={isEmpty ? 0.2 : 0.35} />
-
-        {/* 동전 투입구 */}
+        <ellipse cx="55" cy="72" rx="12" ry="7" fill="white" opacity={isEmpty ? 0.2 : 0.35} />
         <rect x="58" y="50" width="26" height="5" rx="2.5"
           fill={isEmpty ? "#BBBBBB" : "#AA6080"} opacity={isEmpty ? 0.5 : 0.6} />
-
-        {/* 눈 */}
         <circle cx="56" cy="80" r={isEmpty ? 4 : 5} fill={fills.eye} />
         <circle cx="86" cy="80" r={isEmpty ? 4 : 5} fill={fills.eye} />
         {!isEmpty && (
@@ -97,34 +109,20 @@ function PiggyIllustration({ mood }: { mood: string }) {
             <circle cx="88" cy="78" r="1.5" fill="white" />
           </>
         )}
-
-        {/* 코 */}
         <ellipse cx="71" cy="95" rx="14" ry="10" fill={fills.cheek} opacity="0.7" />
         <circle cx="66" cy="95" r="3" fill={fills.body} opacity="0.6" />
         <circle cx="76" cy="95" r="3" fill={fills.body} opacity="0.6" />
-
-        {/* 표정 */}
         {isHappy ? (
-          /* 웃는 입 */
-          <path d="M59 107 Q71 118 83 107"
-            stroke={isRich ? "#CC8800" : "#CC4477"}
+          <path d="M59 107 Q71 118 83 107" stroke={isRich ? "#CC8800" : "#CC4477"}
             strokeWidth="2.5" strokeLinecap="round" fill="none" />
         ) : (
-          /* 슬프거나 무표정 */
           <path d={isEmpty ? "M60 112 Q71 104 82 112" : "M61 108 Q71 108 81 108"}
-            stroke="#AAAAAA"
-            strokeWidth="2.5" strokeLinecap="round" fill="none" />
+            stroke="#AAAAAA" strokeWidth="2.5" strokeLinecap="round" fill="none" />
         )}
-
-        {/* 꼬리 */}
         <path d="M118 88 Q128 80 124 68 Q120 56 130 50"
           stroke={fills.body} strokeWidth="6" strokeLinecap="round" fill="none" />
-
-        {/* 발 */}
         <ellipse cx="51" cy="130" rx="10" ry="6" fill={fills.cheek} opacity="0.8" />
         <ellipse cx="91" cy="130" rx="10" ry="6" fill={fills.cheek} opacity="0.8" />
-
-        {/* 반짝이 (rich/happy) */}
         {isRich && (
           <g fill="#FFD700" opacity="0.85">
             <text x="20"  y="52" fontSize="14">✨</text>
@@ -133,8 +131,6 @@ function PiggyIllustration({ mood }: { mood: string }) {
           </g>
         )}
       </svg>
-
-      {/* 3D 에셋 안내 뱃지 */}
       <span className="piggy-badge">3D 에셋 삽입 예정</span>
     </div>
   );
@@ -143,11 +139,22 @@ function PiggyIllustration({ mood }: { mood: string }) {
 // ─── 홈 페이지 ──────────────────────────────────────
 export default function HomePage() {
   const [activeNav, setActiveNav] = useState<"홈" | "친구">("홈");
+  const [records, setRecords] = useState<PiggyRecord[]>([]);
 
-  // 현재는 첫 방문 빈 상태 (실제로는 서버/스토어에서 가져옴)
-  const totalSaved = 0;
-  const todaySaved = 0;
-  const recentRecords: never[] = [];
+  // 마운트 시 & 포커스 복귀 시 localStorage에서 읽기
+  useEffect(() => {
+    const load = () => setRecords(getRecords());
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, []);
+
+  const totalSaved: number = records.reduce((s, r) => s + r.amount, 0);
+  const todayStr = new Date().toDateString();
+  const todaySaved: number = records
+    .filter(r => new Date(r.createdAt).toDateString() === todayStr)
+    .reduce((s, r) => s + r.amount, 0);
+  const recentRecords = records.slice(0, 5);
 
   const piggy = getPiggyState(totalSaved);
 
@@ -219,11 +226,14 @@ export default function HomePage() {
               {todaySaved === 0 ? (
                 <span className="amount-zero">0원</span>
               ) : (
-                <>{todaySaved.toLocaleString()}<span className="amount-unit">원</span></>
+                <><span className="amount-value">{todaySaved.toLocaleString()}</span><span className="amount-unit">원</span></>
               )}
             </p>
             {todaySaved === 0 && (
               <p className="today-card-hint">아직 기록이 없어요. 첫 참기에 도전해보세요!</p>
+            )}
+            {totalSaved > 0 && (
+              <p className="total-saved-hint">누적 절약 <strong>{totalSaved.toLocaleString()}원</strong></p>
             )}
           </section>
 
@@ -240,10 +250,24 @@ export default function HomePage() {
                   첫 번째 참기를 기록해보세요
                 </p>
               </div>
-            ) : null}
+            ) : (
+              <div className="record-list">
+                {recentRecords.map(r => (
+                  <div key={r.id} className="record-item">
+                    <div className="record-info">
+                      <span className="record-label">
+                        {r.situation ?? (r.memo || "절약 기록")}
+                      </span>
+                      <span className="record-time">{formatTime(r.createdAt)}</span>
+                    </div>
+                    <span className="record-amount">+{r.amount.toLocaleString()}원</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
-          {/* 하단 여백 (바 높이만큼) */}
+          {/* 하단 여백 */}
           <div style={{ height: 98 }} />
         </main>
 
@@ -301,7 +325,7 @@ const css = `
   /* ── 앱 셸 ── */
   .shell {
     width: 100%;
-    max-width: 402px;          /* Figma MainFrame 너비 */
+    max-width: 402px;
     height: 100svh;
     margin: 0 auto;
     background: #FFFFFF;
@@ -460,19 +484,29 @@ const css = `
     line-height: 1;
     margin-bottom: 10px;
   }
-  .amount-zero {
-    color: #D0D0D0;
-  }
+  .amount-zero { color: #D0D0D0; }
+  .amount-value { color: #111111; }
   .amount-unit {
     font-size: 22px;
     font-weight: 700;
     margin-left: 2px;
+    color: #111111;
   }
   .today-card-hint {
     font-size: 12px;
     color: #BBBBBB;
     letter-spacing: -0.01em;
     line-height: 1.5;
+  }
+  .total-saved-hint {
+    font-size: 12px;
+    color: #767676;
+    letter-spacing: -0.01em;
+    margin-top: 6px;
+  }
+  .total-saved-hint strong {
+    color: #FF2A7A;
+    font-weight: 700;
   }
 
   /* ── 최근 기록 ── */
@@ -485,6 +519,49 @@ const css = `
     color: #111111;
     letter-spacing: -0.03em;
     margin-bottom: 16px;
+  }
+
+  /* ── 기록 목록 ── */
+  .record-list {
+    display: flex;
+    flex-direction: column;
+  }
+  .record-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 0;
+    border-bottom: 1px solid #F7F7F7;
+  }
+  .record-item:last-child { border-bottom: none; }
+  .record-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+  }
+  .record-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #111111;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .record-time {
+    font-size: 12px;
+    color: #BBBBBB;
+    letter-spacing: -0.01em;
+  }
+  .record-amount {
+    font-size: 15px;
+    font-weight: 700;
+    color: #FF2A7A;
+    letter-spacing: -0.02em;
+    flex-shrink: 0;
+    margin-left: 12px;
   }
 
   /* ── 빈 상태 ── */
@@ -520,7 +597,7 @@ const css = `
   /* ── FAB ── */
   .fab {
     position: absolute;
-    bottom: calc(64px + 34px + 20px);   /* 하단바 + 홈인디케이터 + 여백 */
+    bottom: calc(64px + 34px + 20px);
     right: 20px;
     width: 56px;
     height: 56px;
@@ -567,15 +644,9 @@ const css = `
     -webkit-tap-highlight-color: transparent;
     padding: 0;
   }
-  .nav-item--active {
-    color: #FF2A7A;
-  }
-  .nav-item--active svg {
-    stroke: #FF2A7A;
-  }
-  .nav-item:not(.nav-item--active) svg {
-    stroke: #CCCCCC;
-  }
+  .nav-item--active { color: #FF2A7A; }
+  .nav-item--active svg { stroke: #FF2A7A; }
+  .nav-item:not(.nav-item--active) svg { stroke: #CCCCCC; }
 
   /* ── 홈 인디케이터 (34px) ── */
   .home-indicator {

@@ -2,9 +2,20 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { type PiggyRecord, STORAGE_KEY } from "../page";
 
 // ─── 상황 태그 ────────────────────────────────────────
 const SITUATIONS = ["차액 아끼기", "배달 참기", "커피 참기", "쇼핑 참기", "택시 참기", "간식 참기"];
+
+function addRecord(record: PiggyRecord) {
+  try {
+    const existing: PiggyRecord[] = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+    existing.unshift(record);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
+  } catch (e) {
+    console.error("저장 실패:", e);
+  }
+}
 
 type SaveState = "idle" | "saving" | "done";
 
@@ -21,6 +32,14 @@ export default function RecordPage() {
 
   const handleSave = () => {
     if (amount <= 0) return;
+    const record: PiggyRecord = {
+      id: Date.now().toString(),
+      amount,
+      situation: situation,
+      memo: memo.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    addRecord(record);
     setSaveState("saving");
     setTimeout(() => setSaveState("done"), 900);
   };
