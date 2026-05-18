@@ -147,7 +147,7 @@ export default function FriendsPage() {
             /* 그룹 목록 */
             <div className="group-list">
               {groups.map(g => (
-                <button key={g.id} className="group-card">
+                <button key={g.id} className="group-card" onClick={() => window.location.href = `/group/${g.id}`}>
                   <div className="group-card-left">
                     <div className="group-avatar">
                       {g.name.charAt(0)}
