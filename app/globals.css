@@ -1,26 +1,44 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* ── Brand ── */
+  --brand:          #FF2A7A;
+  --brand-light:    #FFE8F2;
+
+  /* ── Text ── */
+  --text-primary:   #111111;
+  --text-secondary: #767676;
+  --text-disabled:  #999999;
+
+  /* ── Background ── */
+  --bg-white:       #FFFFFF;
+  --bg-page:        #F7F7F7;
+  --bg-gray:        #F1F1F5;
+
+  /* ── Border ── */
+  --border:         #E5E5EC;
+  --border-light:   #F1F1F5;
+
+  /* ── Category colors ── */
+  --cat-delivery-text: #FF5500;
+  --cat-delivery-bg:   #FFF0E8;
+  --cat-cafe-text:     #6B4226;
+  --cat-cafe-bg:       #FFF5EE;
+  --cat-shopping-text: #0055CC;
+  --cat-shopping-bg:   #EBF2FF;
+  --cat-fandom-text:   #9B18A2;
+  --cat-fandom-bg:     #F9F0FF;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+*, *::before, *::after {
+  box-sizing: border-box;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+html, body {
+  height: 100%;
+  background: var(--bg-page);
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
