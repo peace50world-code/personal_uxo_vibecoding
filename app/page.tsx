@@ -138,7 +138,6 @@ function PiggyIllustration({ mood }: { mood: string }) {
 
 // ─── 홈 페이지 ──────────────────────────────────────
 export default function HomePage() {
-  const [activeNav, setActiveNav] = useState<"홈" | "친구">("홈");
   const [records, setRecords] = useState<PiggyRecord[]>([]);
 
   // 마운트 시 & 포커스 복귀 시 localStorage에서 읽기
@@ -282,23 +281,17 @@ export default function HomePage() {
 
         {/* ── 하단 네비게이션 ── */}
         <nav className="bottom-nav">
-          <button
-            className={`nav-item ${activeNav === "홈" ? "nav-item--active" : ""}`}
-            onClick={() => setActiveNav("홈")}
-          >
+          <Link href="/" className="nav-item nav-item--active" aria-label="홈">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 9.5L12 3L21 9.5V20a1 1 0 0 1-1 1H15v-6H9v6H4a1 1 0 0 1-1-1V9.5z"
-                fill={activeNav === "홈" ? "#FF2A7A" : "none"}
+                fill="#FF2A7A"
               />
             </svg>
             <span>홈</span>
-          </button>
+          </Link>
 
-          <button
-            className={`nav-item ${activeNav === "친구" ? "nav-item--active" : ""}`}
-            onClick={() => setActiveNav("친구")}
-          >
+          <Link href="/friends" className="nav-item" aria-label="친구">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="9" cy="7" r="4"/>
@@ -307,7 +300,7 @@ export default function HomePage() {
               <path d="M21 21v-2a4 4 0 0 0-3-3.85"/>
             </svg>
             <span>친구</span>
-          </button>
+          </Link>
         </nav>
 
         {/* ── 홈 인디케이터 ── */}
@@ -647,6 +640,7 @@ const css = `
   .nav-item--active { color: #FF2A7A; }
   .nav-item--active svg { stroke: #FF2A7A; }
   .nav-item:not(.nav-item--active) svg { stroke: #CCCCCC; }
+  a.nav-item { text-decoration: none; }
 
   /* ── 홈 인디케이터 (34px) ── */
   .home-indicator {
