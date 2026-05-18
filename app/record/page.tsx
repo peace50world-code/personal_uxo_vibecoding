@@ -3,68 +3,44 @@
 import { useState } from "react";
 import Link from "next/link";
 
-// ─── 카테고리 ───────────────────────────────────────
-type CategoryKey = "배달" | "카페" | "쇼핑" | "덕질";
-
-const CATEGORIES: { key: CategoryKey; emoji: string; color: string; bg: string }[] = [
-  { key: "배달", emoji: "🛵", color: "#FF5500", bg: "#FFF0E8" },
-  { key: "카페", emoji: "☕", color: "#6B4226", bg: "#FFF5EE" },
-  { key: "쇼핑", emoji: "🛍️", color: "#0055CC", bg: "#EBF2FF" },
-  { key: "덕질", emoji: "⭐", color: "#9B18A2", bg: "#F9F0FF" },
-];
-
-// ─── 빠른 입력 아이템 ───────────────────────────────
-const QUICK_ITEMS = [
-  { id: 1, category: "카페" as CategoryKey, label: "아이스 아메리카노", amount: 4500 },
-  { id: 2, category: "배달" as CategoryKey, label: "치킨 세트", amount: 18000 },
-  { id: 3, category: "쇼핑" as CategoryKey, label: "충동구매 아이템", amount: 0 },
-];
+// ─── 상황 태그 ────────────────────────────────────────
+const SITUATIONS = ["차액 아끼기", "배달 참기", "커피 참기", "쇼핑 참기", "택시 참기", "간식 참기"];
 
 type SaveState = "idle" | "saving" | "done";
 
 export default function RecordPage() {
-  const [category, setCategory]   = useState<CategoryKey | null>(null);
-  const [item,     setItem]       = useState("");
-  const [amount,   setAmount]     = useState("");
-  const [quickId,  setQuickId]    = useState<number | null>(null);
+  const [amount,    setAmount]    = useState(0);
+  const [situation, setSituation] = useState<string | null>(null);
+  const [memo,      setMemo]      = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
 
-  const handleQuickSelect = (q: typeof QUICK_ITEMS[0]) => {
-    setQuickId(q.id);
-    setCategory(q.category);
-    setItem(q.label);
-    if (q.amount > 0) setAmount(String(q.amount));
+  const addAmount = (delta: number) => {
+    setAmount(prev => Math.max(0, prev + delta));
   };
+  const clearAmount = () => setAmount(0);
 
   const handleSave = () => {
-    if (!item.trim() || !amount || !category) return;
+    if (amount <= 0) return;
     setSaveState("saving");
     setTimeout(() => setSaveState("done"), 900);
   };
 
-  const canSave = !!category && item.trim().length > 0 && amount.length > 0 && saveState === "idle";
+  const canSave = amount > 0 && saveState === "idle";
 
   /* ── 저장 완료 화면 ── */
   if (saveState === "done") {
-    const cat = CATEGORIES.find(c => c.key === category)!;
     return (
       <>
         <style>{css}</style>
         <div className="shell">
           <div className="done-screen">
-            {/* 성공 아이콘 */}
-            <div className="done-circle" style={{ background: cat.bg }}>
-              <span style={{ fontSize: 52 }}>{cat.emoji}</span>
-            </div>
-
+            <div className="done-pig">🐷</div>
             <div className="done-badge">🎉 절약 성공!</div>
             <h1 className="done-title">잘 참았어요!</h1>
             <p className="done-sub">
-              <span className="done-item-name">{item}</span>을(를) 참아서
-              <br />
-              <span className="done-amount">{Number(amount).toLocaleString()}원</span>을 아꼈어요
+              <span className="done-amount">{amount.toLocaleString()}원</span>을 아꼈어요
+              {situation && <><br /><span className="done-situation">{situation}</span></>}
             </p>
-
             <Link href="/" className="btn-home">홈으로 돌아가기</Link>
           </div>
         </div>
@@ -77,139 +53,108 @@ export default function RecordPage() {
       <style>{css}</style>
       <div className="shell">
 
-        {/* ─── 헤더 ─── */}
-        <header className="page-header">
-          <Link href="/" className="back-btn" aria-label="뒤로">
+        {/* ─── 상태바 ─── */}
+        <div className="status-bar">
+          <span className="status-time">9:41</span>
+          <div className="status-icons">
+            <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
+              <rect x="0"  y="4" width="3" height="8" rx="1" fill="#111"/>
+              <rect x="4"  y="2" width="3" height="10" rx="1" fill="#111"/>
+              <rect x="8"  y="0" width="3" height="12" rx="1" fill="#111"/>
+              <rect x="12" y="0" width="3" height="12" rx="1" fill="#111" opacity="0.3"/>
+            </svg>
+            <svg width="16" height="12" viewBox="0 0 25 12" fill="none">
+              <rect x="0.5" y="0.5" width="21" height="11" rx="3.5" stroke="#111" strokeOpacity="0.35"/>
+              <rect x="2"   y="2"   width="16" height="8"  rx="2"   fill="#111"/>
+              <path d="M23 4.5v3c.826-.413 1.5-1.5 1.5-1.5S23.826 4.913 23 4.5z" fill="#111" opacity="0.4"/>
+            </svg>
+          </div>
+        </div>
+
+        {/* ─── 닫기 버튼 행 ─── */}
+        <div className="close-row">
+          <Link href="/" className="close-btn" aria-label="닫기">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M19 12H5M5 12l7-7M5 12l7 7"/>
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6"  y2="18"/>
+              <line x1="6"  y1="6" x2="18" y2="18"/>
             </svg>
           </Link>
-          <h1 className="page-title">참은 소비 기록하기</h1>
-        </header>
+        </div>
 
         {/* ─── 스크롤 바디 ─── */}
         <div className="scroll-body">
 
-          {/* 카테고리 선택 */}
-          <section className="form-section">
-            <label className="form-label">카테고리</label>
-            <div className="cat-grid">
-              {CATEGORIES.map((c) => (
+          {/* 참은 금액 입력 */}
+          <section className="amount-section">
+            <p className="amount-label">참은 금액</p>
+            <div className="amount-display">
+              <span className={`amount-number ${amount > 0 ? "amount-number--active" : ""}`}>
+                {amount.toLocaleString()}
+              </span>
+              <span className="amount-unit">원</span>
+            </div>
+          </section>
+
+          {/* 빠른 버튼 행 1: +1,000 / +5,000 / +10,000 */}
+          <div className="btn-row">
+            {[1000, 5000, 10000].map(v => (
+              <button key={v} className="quick-add-btn" onClick={() => addAmount(v)}>
+                +{v.toLocaleString()}
+              </button>
+            ))}
+          </div>
+
+          {/* 빠른 버튼 행 2: -1,000 / C */}
+          <div className="btn-row btn-row--secondary">
+            <button className="quick-sub-btn" onClick={() => addAmount(-1000)}>
+              -1,000
+            </button>
+            <button className="quick-clear-btn" onClick={clearAmount}>
+              C
+            </button>
+          </div>
+
+          {/* 상황 선택 */}
+          <section className="situation-section">
+            <p className="section-label">상황 선택</p>
+            <div className="chips-grid">
+              {SITUATIONS.map(s => (
                 <button
-                  key={c.key}
-                  className={`cat-card ${category === c.key ? "cat-card--active" : ""}`}
-                  onClick={() => { setCategory(c.key); setQuickId(null); }}
-                  style={category === c.key
-                    ? { borderColor: c.color, backgroundColor: c.bg }
-                    : {}
-                  }
+                  key={s}
+                  className={`chip ${situation === s ? "chip--active" : ""}`}
+                  onClick={() => setSituation(prev => prev === s ? null : s)}
                 >
-                  <span className="cat-card-emoji">{c.emoji}</span>
-                  <span className="cat-card-label"
-                    style={{ color: category === c.key ? c.color : "#111111" }}>
-                    {c.key}
-                  </span>
+                  {s}
                 </button>
               ))}
             </div>
           </section>
 
-          {/* 빠른 입력 */}
-          <section className="form-section">
-            <div className="label-row">
-              <label className="form-label">원터치 자동입력</label>
-              <span className="label-hint">탭하면 자동으로 채워져요</span>
-            </div>
-            <div className="quick-list">
-              {QUICK_ITEMS.map((q) => (
-                <button
-                  key={q.id}
-                  className={`quick-item ${quickId === q.id ? "quick-item--active" : ""}`}
-                  onClick={() => handleQuickSelect(q)}
-                >
-                  <span className="quick-item-emoji">
-                    {CATEGORIES.find(c => c.key === q.category)?.emoji}
-                  </span>
-                  <div className="quick-item-info">
-                    <span className="quick-item-label">{q.label}</span>
-                    {q.amount > 0 && (
-                      <span className="quick-item-amount">{q.amount.toLocaleString()}원</span>
-                    )}
-                  </div>
-                  {quickId === q.id && (
-                    <span className="quick-check">
-                      <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                        <path d="M2 7l4 4 6-6" stroke="white" strokeWidth="2"
-                          strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* 무엇을 참았나요 */}
-          <section className="form-section">
-            <label className="form-label" htmlFor="item-input">무엇을 참았나요?</label>
-            <div className={`input-wrap ${item ? "input-wrap--filled" : ""}`}>
-              <input
-                id="item-input"
-                className="text-input"
-                type="text"
-                placeholder="아이스 아메리카노, 신발, 콘서트 티켓…"
-                value={item}
-                onChange={(e) => { setItem(e.target.value); setQuickId(null); }}
-              />
-              {item && (
-                <button className="input-clear" onClick={() => { setItem(""); setQuickId(null); }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <line x1="18" y1="6" x2="6" y2="18"/>
-                    <line x1="6" y1="6" x2="18" y2="18"/>
-                  </svg>
-                </button>
-              )}
-            </div>
-          </section>
-
-          {/* 얼마를 아꼈나요 */}
-          <section className="form-section">
-            <label className="form-label" htmlFor="amount-input">얼마를 아꼈나요?</label>
-            <div className={`input-wrap ${amount ? "input-wrap--filled" : ""}`}>
-              <input
-                id="amount-input"
-                className="text-input"
-                type="number"
-                inputMode="numeric"
-                placeholder="0"
-                value={amount}
-                onChange={(e) => { setAmount(e.target.value); setQuickId(null); }}
-              />
-              <span className="input-suffix">원</span>
-            </div>
-            {amount && Number(amount) > 0 && (
-              <p className="amount-preview">
-                {Number(amount).toLocaleString()}원을 아꼈어요 🐷
-              </p>
-            )}
-          </section>
+          {/* 직접 입력 */}
+          <div className="memo-wrap">
+            <input
+              className="memo-input"
+              type="text"
+              placeholder="또는 직접 입력하세요"
+              value={memo}
+              onChange={e => setMemo(e.target.value)}
+              maxLength={40}
+            />
+          </div>
 
         </div>
 
-        {/* ─── 저장 버튼 ─── */}
+        {/* ─── 저장 버튼 영역 ─── */}
         <div className="bottom-area">
           <button
             className={`btn-save ${!canSave ? "btn-save--disabled" : ""} ${saveState === "saving" ? "btn-save--loading" : ""}`}
             onClick={handleSave}
             disabled={!canSave}
           >
-            {saveState === "saving"
-              ? <span className="spinner" />
-              : "저장하기"
-            }
+            {saveState === "saving" ? <span className="spinner" /> : "저장하기"}
           </button>
+          <div className="home-indicator" />
         </div>
 
       </div>
@@ -222,247 +167,266 @@ const css = `
   /* ── 앱 셸 ── */
   .shell {
     width: 100%;
-    max-width: 390px;
-    min-height: 100svh;
+    max-width: 402px;
+    height: 100svh;
     margin: 0 auto;
     background: #FFFFFF;
     display: flex;
     flex-direction: column;
     position: relative;
     font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
   }
 
-  /* ── 헤더 ── */
-  .page-header {
-    position: sticky;
-    top: 0;
-    z-index: 20;
+  /* ── 상태바 ── */
+  .status-bar {
+    height: 44px;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 14px 20px;
+    justify-content: space-between;
+    padding: 0 20px;
     background: #FFFFFF;
-    border-bottom: 1px solid #F1F1F5;
   }
-  .back-btn {
-    width: 38px;
-    height: 38px;
+  .status-time {
+    font-size: 15px;
+    font-weight: 600;
+    color: #111111;
+    letter-spacing: -0.01em;
+  }
+  .status-icons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* ── 닫기 버튼 행 ── */
+  .close-row {
+    height: 48px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+  }
+  .close-btn {
+    width: 36px;
+    height: 36px;
     display: flex;
     align-items: center;
     justify-content: center;
     background: #F1F1F5;
-    border: none;
     border-radius: 50%;
     color: #111111;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background 0.15s;
     text-decoration: none;
+    transition: background 0.15s;
     -webkit-tap-highlight-color: transparent;
   }
-  .back-btn:active { background: #E5E5EC; }
-  .page-title {
-    font-size: 17px;
-    font-weight: 700;
-    color: #111111;
-    letter-spacing: -0.025em;
-  }
+  .close-btn:active { background: #E5E5EC; }
 
   /* ── 스크롤 바디 ── */
   .scroll-body {
     flex: 1;
     overflow-y: auto;
-    padding: 4px 20px 140px;
+    padding: 0 20px 24px;
     scrollbar-width: none;
   }
   .scroll-body::-webkit-scrollbar { display: none; }
 
-  /* ── 폼 섹션 ── */
-  .form-section {
-    margin-top: 28px;
+  /* ── 금액 섹션 ── */
+  .amount-section {
+    padding-top: 24px;
+    padding-bottom: 32px;
   }
-  .form-label {
-    display: block;
+  .amount-label {
+    font-size: 15px;
+    font-weight: 600;
+    color: #767676;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+  }
+  .amount-display {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 20px 20px;
+    background: #F7F7F7;
+    border-radius: 20px;
+    min-height: 78px;
+    border: 2px solid transparent;
+    transition: border-color 0.2s;
+  }
+  .amount-display:has(.amount-number--active) {
+    border-color: #FF2A7A;
+    background: #FFF8FB;
+  }
+  .amount-number {
+    font-size: 40px;
+    font-weight: 800;
+    color: #D0D0D8;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    transition: color 0.2s;
+  }
+  .amount-number--active {
+    color: #111111;
+  }
+  .amount-unit {
+    font-size: 22px;
+    font-weight: 700;
+    color: #767676;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+
+  /* ── 빠른 버튼 행 ── */
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .btn-row--secondary {
+    margin-bottom: 32px;
+  }
+
+  .quick-add-btn {
+    flex: 1;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #111111;
+    color: #FFFFFF;
+    font-family: 'Pretendard', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .quick-add-btn:active {
+    background: #333333;
+    transform: scale(0.96);
+  }
+
+  .quick-sub-btn {
+    flex: 1;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #F1F1F5;
+    color: #111111;
+    font-family: 'Pretendard', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .quick-sub-btn:active { background: #E5E5EC; transform: scale(0.96); }
+
+  .quick-clear-btn {
+    width: 80px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #FFE8F2;
+    color: #FF2A7A;
+    font-family: 'Pretendard', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .quick-clear-btn:active { background: #FFD4E9; transform: scale(0.96); }
+
+  /* ── 상황 선택 ── */
+  .situation-section {
+    margin-bottom: 20px;
+  }
+  .section-label {
     font-size: 15px;
     font-weight: 700;
     color: #111111;
     letter-spacing: -0.02em;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
   }
-  .label-row {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  .label-hint {
-    font-size: 12px;
-    color: #999999;
-  }
-
-  /* ── 카테고리 그리드 ── */
-  .cat-grid {
+  .chips-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 8px;
   }
-  .cat-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding: 14px 8px 12px;
-    background: #F7F7F7;
-    border: 2px solid transparent;
-    border-radius: 16px;
-    cursor: pointer;
-    transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
-    -webkit-tap-highlight-color: transparent;
-  }
-  .cat-card:active { transform: scale(0.94); }
-  .cat-card--active {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  }
-  .cat-card-emoji { font-size: 24px; line-height: 1; }
-  .cat-card-label {
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-
-  /* ── 빠른 입력 목록 ── */
-  .quick-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .quick-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 16px;
-    background: #F7F7F7;
-    border: 2px solid transparent;
-    border-radius: 14px;
-    cursor: pointer;
-    transition: all 0.15s;
-    position: relative;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .quick-item:active { opacity: 0.8; }
-  .quick-item--active {
-    border-color: #FF2A7A;
-    background: #FFF0F8;
-  }
-  .quick-item-emoji { font-size: 22px; line-height: 1; flex-shrink: 0; }
-  .quick-item-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-    min-width: 0;
-    text-align: left;
-  }
-  .quick-item-label {
-    font-size: 14px;
-    font-weight: 500;
-    color: #111111;
-    letter-spacing: -0.01em;
-  }
-  .quick-item-amount {
-    font-size: 13px;
-    font-weight: 700;
-    color: #FF2A7A;
-  }
-  .quick-check {
-    width: 22px;
-    height: 22px;
-    background: #FF2A7A;
-    border-radius: 50%;
+  .chip {
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0;
+    background: #F7F7F7;
+    border: 2px solid transparent;
+    border-radius: 100px;
+    font-family: 'Pretendard', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: #767676;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    white-space: nowrap;
+  }
+  .chip:active { transform: scale(0.96); }
+  .chip--active {
+    background: #FFE8F2;
+    border-color: #FF2A7A;
+    color: #FF2A7A;
   }
 
-  /* ── 인풋 ── */
-  .input-wrap {
-    display: flex;
-    align-items: center;
-    height: 56px;
-    padding: 0 16px;
-    background: #F7F7F7;
-    border: 1.5px solid transparent;
+  /* ── 직접 입력 ── */
+  .memo-wrap {
     border-radius: 14px;
-    transition: border-color 0.2s, background 0.2s;
+    overflow: hidden;
+    border: 1.5px solid #E5E5EC;
+    transition: border-color 0.2s;
   }
-  .input-wrap:focus-within {
-    background: #FFFFFF;
+  .memo-wrap:focus-within {
     border-color: #FF2A7A;
     box-shadow: 0 0 0 3px rgba(255, 42, 122, 0.10);
   }
-  .input-wrap--filled {
-    background: #FFFFFF;
-    border-color: #E5E5EC;
-  }
-  .text-input {
-    flex: 1;
-    height: 100%;
-    background: transparent;
+  .memo-input {
+    width: 100%;
+    height: 52px;
+    padding: 0 16px;
+    background: #FAFAFA;
     border: none;
     outline: none;
     font-family: 'Pretendard', sans-serif;
-    font-size: 15px;
-    font-weight: 500;
+    font-size: 14px;
+    font-weight: 400;
     color: #111111;
-    -moz-appearance: textfield;
     letter-spacing: -0.01em;
   }
-  .text-input::-webkit-inner-spin-button,
-  .text-input::-webkit-outer-spin-button { -webkit-appearance: none; }
-  .text-input::placeholder {
+  .memo-input::placeholder {
     color: #BBBBBB;
-    font-weight: 400;
-  }
-  .input-clear {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: #BBBBBB;
-    display: flex;
-    align-items: center;
-    padding: 4px;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .input-clear:hover { color: #767676; }
-  .input-suffix {
-    font-size: 15px;
-    font-weight: 600;
-    color: #767676;
-    flex-shrink: 0;
-    margin-left: 4px;
-  }
-  .amount-preview {
-    margin-top: 8px;
-    padding-left: 4px;
-    font-size: 13px;
-    font-weight: 600;
-    color: #FF2A7A;
-    animation: fadeUp 0.2s ease;
   }
 
   /* ── 저장 버튼 영역 ── */
   .bottom-area {
-    position: fixed;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 100%;
-    max-width: 390px;
-    padding: 12px 20px max(20px, env(safe-area-inset-bottom));
-    background: linear-gradient(to bottom, transparent, #fff 28%);
-    z-index: 30;
+    flex-shrink: 0;
+    padding: 12px 20px 0;
+    background: #FFFFFF;
+    border-top: 1px solid #F1F1F5;
   }
   .btn-save {
     width: 100%;
@@ -479,13 +443,13 @@ const css = `
     border: none;
     border-radius: 16px;
     cursor: pointer;
-    box-shadow: 0 6px 20px rgba(255, 42, 122, 0.35);
-    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 6px 20px rgba(255, 42, 122, 0.30);
+    transition: all 0.2s;
     -webkit-tap-highlight-color: transparent;
   }
   .btn-save:not(:disabled):active {
     transform: scale(0.97);
-    box-shadow: 0 3px 10px rgba(255, 42, 122, 0.25);
+    box-shadow: 0 3px 10px rgba(255, 42, 122, 0.20);
   }
   .btn-save--disabled {
     background: #F1F1F5;
@@ -494,6 +458,22 @@ const css = `
     cursor: not-allowed;
   }
   .btn-save--loading { pointer-events: none; }
+
+  /* ── 홈 인디케이터 ── */
+  .home-indicator {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .home-indicator::after {
+    content: '';
+    width: 134px;
+    height: 5px;
+    background: #111111;
+    border-radius: 100px;
+    opacity: 0.18;
+  }
 
   /* ── 스피너 ── */
   .spinner {
@@ -513,16 +493,11 @@ const css = `
     align-items: center;
     justify-content: center;
     padding: 40px 28px 80px;
-    gap: 0;
   }
-  .done-circle {
-    width: 140px;
-    height: 140px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 28px;
+  .done-pig {
+    font-size: 80px;
+    line-height: 1;
+    margin-bottom: 24px;
     animation: popIn 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
   }
   .done-badge {
@@ -552,11 +527,14 @@ const css = `
     margin-bottom: 40px;
     animation: fadeUp 0.4s 0.35s ease both;
   }
-  .done-item-name { font-weight: 700; color: #111111; }
   .done-amount {
     font-size: 20px;
     font-weight: 700;
     color: #FF2A7A;
+  }
+  .done-situation {
+    font-weight: 600;
+    color: #111111;
   }
   .btn-home {
     width: 100%;
@@ -572,14 +550,14 @@ const css = `
     font-weight: 700;
     text-decoration: none;
     border-radius: 16px;
-    box-shadow: 0 6px 20px rgba(255, 42, 122, 0.35);
+    box-shadow: 0 6px 20px rgba(255, 42, 122, 0.30);
     transition: all 0.2s;
     animation: fadeUp 0.4s 0.45s ease both;
     -webkit-tap-highlight-color: transparent;
   }
   .btn-home:active {
     transform: scale(0.97);
-    box-shadow: 0 3px 10px rgba(255, 42, 122, 0.25);
+    box-shadow: 0 3px 10px rgba(255, 42, 122, 0.20);
   }
 
   /* ── 키프레임 ── */
