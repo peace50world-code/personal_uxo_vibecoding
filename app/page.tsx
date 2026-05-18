@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { getProfile, isLoggedIn } from "./onboarding/page";
 
 // ─── 공유 데이터 타입 ─────────────────────────────────
 export interface PiggyRecord {
@@ -138,15 +140,28 @@ function PiggyIllustration({ mood }: { mood: string }) {
 
 // ─── 홈 페이지 ──────────────────────────────────────
 export default function HomePage() {
+  const router  = useRouter();
+  const [ready,   setReady]   = useState(false);
   const [records, setRecords] = useState<PiggyRecord[]>([]);
+  const [nickname, setNickname] = useState("");
 
-  // 마운트 시 & 포커스 복귀 시 localStorage에서 읽기
+  // 인증 가드 + 데이터 로드
   useEffect(() => {
+    const profile = getProfile();
+    if (!profile || !isLoggedIn()) {
+      router.replace("/onboarding");
+      return;
+    }
+    setNickname(profile.nickname);
+    setReady(true);
+
     const load = () => setRecords(getRecords());
     load();
     window.addEventListener("focus", load);
     return () => window.removeEventListener("focus", load);
-  }, []);
+  }, [router]);
+
+  if (!ready) return null;
 
   const totalSaved: number = records.reduce((s, r) => s + r.amount, 0);
   const todayStr = new Date().toDateString();
@@ -189,6 +204,7 @@ export default function HomePage() {
         {/* ── GNB 헤더 ── */}
         <header className="gnb">
           <span className="gnb-logo">참으면돼지</span>
+          <span className="gnb-nickname">{nickname}님 👋</span>
           <div className="gnb-right">
             <button className="gnb-icon-btn" aria-label="알림">
               <span className="notif-dot" />
@@ -361,12 +377,22 @@ const css = `
     flex-shrink: 0;
     background: #FFFFFF;
     border-bottom: 1px solid #F1F1F5;
+    position: relative;
   }
   .gnb-logo {
     font-size: 18px;
     font-weight: 800;
     color: #111111;
     letter-spacing: -0.04em;
+  }
+  .gnb-nickname {
+    font-size: 12px;
+    font-weight: 600;
+    color: #767676;
+    letter-spacing: -0.01em;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
   }
   .gnb-right {
     display: flex;
