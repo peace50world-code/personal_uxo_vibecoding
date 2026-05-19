@@ -9,7 +9,7 @@ import { getProfile } from "../onboarding/page";
 // ─── 상황 태그 ────────────────────────────────────────
 const SITUATIONS = ["차액 아끼기", "배달 참기", "커피 참기", "쇼핑 참기", "택시 참기", "간식 참기"];
 
-function addLocalRecord(record: PiggyRecord) {
+function addRecord(record: PiggyRecord) {
   try {
     const existing: PiggyRecord[] = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
     existing.unshift(record);
@@ -17,18 +17,6 @@ function addLocalRecord(record: PiggyRecord) {
   } catch (e) {
     console.error("저장 실패:", e);
   }
-}
-
-async function getMyGroupId(): Promise<string | null> {
-  const nickname = getProfile()?.nickname;
-  if (!nickname) return null;
-  const { data } = await supabase
-    .from("group_members")
-    .select("group_id")
-    .eq("nickname", nickname)
-    .limit(1)
-    .single();
-  return data?.group_id ?? null;
 }
 
 type SaveState = "idle" | "saving" | "done";
@@ -46,30 +34,36 @@ export default function RecordPage() {
 
   const handleSave = async () => {
     if (amount <= 0) return;
-    setSaveState("saving");
-
     const record: PiggyRecord = {
       id: Date.now().toString(),
       amount,
-      situation,
+      situation: situation,
       memo: memo.trim(),
       createdAt: new Date().toISOString(),
     };
+    addRecord(record);
+    setSaveState("saving");
 
-    // localStorage에 저장 (홈 화면용)
-    addLocalRecord(record);
-
-    // Supabase에도 저장 (그룹 피드용)
     const nickname = getProfile()?.nickname;
-    const groupId  = await getMyGroupId();
-    if (nickname && groupId) {
-      await supabase.from("records").insert({
-        group_id: groupId,
-        nickname,
-        amount,
-        situation,
-        memo: memo.trim(),
-      });
+    if (nickname) {
+      const { data: memberships } = await supabase
+        .from("group_members")
+        .select("group_id")
+        .eq("nickname", nickname);
+
+      if (memberships && memberships.length > 0) {
+        await Promise.all(
+          memberships.map(m =>
+            supabase.from("records").insert({
+              group_id: m.group_id,
+              nickname,
+              amount,
+              situation,
+              memo: memo.trim(),
+            })
+          )
+        );
+      }
     }
 
     setSaveState("done");
