@@ -19,16 +19,14 @@ function addLocalRecord(record: PiggyRecord) {
   }
 }
 
-async function getMyGroupId(): Promise<string | null> {
+async function getMyGroupIds(): Promise<string[]> {
   const nickname = getProfile()?.nickname;
-  if (!nickname) return null;
+  if (!nickname) return [];
   const { data } = await supabase
     .from("group_members")
     .select("group_id")
-    .eq("nickname", nickname)
-    .limit(1)
-    .single();
-  return data?.group_id ?? null;
+    .eq("nickname", nickname);
+  return (data ?? []).map(r => r.group_id);
 }
 
 type SaveState = "idle" | "saving" | "done";
@@ -59,17 +57,13 @@ export default function RecordPage() {
     // localStorage에 저장 (홈 화면용)
     addLocalRecord(record);
 
-    // Supabase에도 저장 (그룹 피드용)
-    const nickname = getProfile()?.nickname;
-    const groupId  = await getMyGroupId();
-    if (nickname && groupId) {
-      await supabase.from("records").insert({
-        group_id: groupId,
-        nickname,
-        amount,
-        situation,
-        memo: memo.trim(),
-      });
+    // Supabase에도 저장 (그룹 피드용) — 내가 속한 모든 그룹에 저장
+    const nickname  = getProfile()?.nickname;
+    const groupIds  = await getMyGroupIds();
+    if (nickname && groupIds.length > 0) {
+      await supabase.from("records").insert(
+        groupIds.map(group_id => ({ group_id, nickname, amount, situation, memo: memo.trim() }))
+      );
     }
 
     setSaveState("done");
