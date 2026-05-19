@@ -77,6 +77,46 @@ export default function FriendsPage() {
   const joinRef   = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // ?invite= 파라미터 처리 (초대 링크로 접속한 경우)
+    const params = new URLSearchParams(window.location.search);
+    const inviteParam = params.get("invite") || sessionStorage.getItem("piggy-pending-invite");
+    if (inviteParam) {
+      sessionStorage.removeItem("piggy-pending-invite");
+      window.history.replaceState({}, "", "/friends");
+      try {
+        const groupData: PiggyGroup = JSON.parse(decodeURIComponent(atob(inviteParam)));
+        const profile = getProfile();
+        // 로그인 안 됐으면 onboarding 후 처리
+        if (!profile) {
+          sessionStorage.setItem("piggy-pending-invite", inviteParam);
+          window.location.href = "/onboarding";
+          return;
+        }
+        // 그룹이 없으면 localStorage에 추가
+        const existing = getGroups();
+        if (!existing.find(g => g.id === groupData.id)) {
+          localStorage.setItem(GROUPS_KEY, JSON.stringify([groupData, ...existing]));
+        }
+        // 현재 사용자를 멤버로 추가
+        const allGroups = getGroups();
+        const target = allGroups.find(g => g.id === groupData.id);
+        if (target) {
+          const alreadyMember = (target.members ?? []).some(m => m.userId === profile.userId);
+          if (!alreadyMember) {
+            const updated: PiggyGroup = {
+              ...target,
+              members: [...(target.members ?? []), { userId: profile.userId, nickname: profile.nickname, joinedAt: new Date().toISOString() }],
+              memberCount: (target.memberCount ?? 0) + 1,
+            };
+            localStorage.setItem(GROUPS_KEY, JSON.stringify(allGroups.map(g => g.id === target.id ? updated : g)));
+          }
+        }
+        window.location.href = `/group/${groupData.id}`;
+        return;
+      } catch {
+        // 잘못된 초대 링크 — 무시
+      }
+    }
     setGroups(getGroups());
   }, []);
 
