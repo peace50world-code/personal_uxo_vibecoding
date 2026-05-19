@@ -9,7 +9,7 @@ import { getProfile } from "../onboarding/page";
 // ─── 상황 태그 ────────────────────────────────────────
 const SITUATIONS = ["차액 아끼기", "배달 참기", "커피 참기", "쇼핑 참기", "택시 참기", "간식 참기"];
 
-function addLocalRecord(record: PiggyRecord) {
+function addRecord(record: PiggyRecord) {
   try {
     const existing: PiggyRecord[] = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
     existing.unshift(record);
@@ -17,16 +17,6 @@ function addLocalRecord(record: PiggyRecord) {
   } catch (e) {
     console.error("저장 실패:", e);
   }
-}
-
-async function getMyGroupIds(): Promise<string[]> {
-  const nickname = getProfile()?.nickname;
-  if (!nickname) return [];
-  const { data } = await supabase
-    .from("group_members")
-    .select("group_id")
-    .eq("nickname", nickname);
-  return (data ?? []).map(r => r.group_id);
 }
 
 type SaveState = "idle" | "saving" | "done";
@@ -44,36 +34,36 @@ export default function RecordPage() {
 
   const handleSave = async () => {
     if (amount <= 0) return;
-    setSaveState("saving");
-
     const record: PiggyRecord = {
       id: Date.now().toString(),
       amount,
-      situation,
+      situation: situation,
       memo: memo.trim(),
       createdAt: new Date().toISOString(),
     };
+    addRecord(record);
+    setSaveState("saving");
 
-    // localStorage에 저장 (홈 화면용)
-    addLocalRecord(record);
+    const nickname = getProfile()?.nickname;
+    if (nickname) {
+      const { data: memberships } = await supabase
+        .from("group_members")
+        .select("group_id")
+        .eq("nickname", nickname);
 
-    // Supabase에도 저장 (그룹 피드용) — 내가 속한 모든 그룹에 저장
-    const profile  = getProfile();
-    const nickname = profile?.nickname;
-    const userId   = profile?.userId;
-    const groupIds = await getMyGroupIds();
-    if (nickname && groupIds.length > 0) {
-      const { error: recErr } = await supabase.from("records").insert(
-        groupIds.map(group_id => ({
-          group_id,
-          nickname,
-          user_id: userId ?? null,
-          amount,
-          situation,
-          memo: memo.trim(),
-        }))
-      );
-      if (recErr) console.error("기록 저장 실패:", recErr);
+      if (memberships && memberships.length > 0) {
+        await Promise.all(
+          memberships.map(m =>
+            supabase.from("records").insert({
+              group_id: m.group_id,
+              nickname,
+              amount,
+              situation,
+              memo: memo.trim(),
+            })
+          )
+        );
+      }
     }
 
     setSaveState("done");
