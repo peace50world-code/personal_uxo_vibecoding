@@ -61,16 +61,33 @@ export default function GroupPage() {
 
     load();
 
-    // 실시간 새 기록 구독
+    // 실시간 새 기록/멤버 변경 구독 — 이벤트 수신 시 전체 재조회 (피드 + 통계 동시 갱신)
     const sub = supabase
       .channel(`group-${id}`)
       .on("postgres_changes", {
-        event: "INSERT", schema: "public", table: "records",
+        event: "*", schema: "public", table: "records",
         filter: `group_id=eq.${id}`,
-      }, payload => {
-        setRecords(prev => [payload.new as FeedRecord, ...prev]);
+      }, () => {
+        fetchRecords();
       })
-      .subscribe();
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "group_members",
+        filter: `group_id=eq.${id}`,
+      }, async () => {
+        const { data: m } = await supabase
+          .from("group_members").select("*").eq("group_id", id).order("joined_at");
+        setMembers(m ?? []);
+      })
+      .subscribe(status => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.error("Realtime 구독 실패:", status);
+        }
+      });
+
+    // 폴링 폴백 — Realtime이 작동하지 않을 때 대비 (15초마다)
+    const pollId = setInterval(() => {
+      if (document.visibilityState === "visible") fetchRecords();
+    }, 15000);
 
     // 페이지 복귀 시 재조회
     const onVisible = () => { if (document.visibilityState === "visible") fetchRecords(); };
@@ -79,6 +96,7 @@ export default function GroupPage() {
 
     return () => {
       supabase.removeChannel(sub);
+      clearInterval(pollId);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", fetchRecords);
     };
