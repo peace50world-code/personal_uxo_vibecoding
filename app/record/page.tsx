@@ -58,12 +58,22 @@ export default function RecordPage() {
     addLocalRecord(record);
 
     // Supabase에도 저장 (그룹 피드용) — 내가 속한 모든 그룹에 저장
-    const nickname  = getProfile()?.nickname;
-    const groupIds  = await getMyGroupIds();
+    const profile  = getProfile();
+    const nickname = profile?.nickname;
+    const userId   = profile?.userId;
+    const groupIds = await getMyGroupIds();
     if (nickname && groupIds.length > 0) {
-      await supabase.from("records").insert(
-        groupIds.map(group_id => ({ group_id, nickname, amount, situation, memo: memo.trim() }))
+      const { error: recErr } = await supabase.from("records").insert(
+        groupIds.map(group_id => ({
+          group_id,
+          nickname,
+          user_id: userId ?? null,
+          amount,
+          situation,
+          memo: memo.trim(),
+        }))
       );
+      if (recErr) console.error("기록 저장 실패:", recErr);
     }
 
     setSaveState("done");
