@@ -2,34 +2,18 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { supabase, generateInviteCode } from "@/lib/supabase";
+import { getProfile } from "../onboarding/page";
 
-// ─── 그룹 데이터 타입 ─────────────────────────────────
 interface PiggyGroup {
   id: string;
   name: string;
-  createdAt: string;
+  invite_code: string;
+  created_at: string;
+  member_count?: number;
 }
 
-const GROUPS_KEY = "piggy-groups";
-
-function getGroups(): PiggyGroup[] {
-  if (typeof window === "undefined") return [];
-  try {
-    return JSON.parse(localStorage.getItem(GROUPS_KEY) ?? "[]");
-  } catch {
-    return [];
-  }
-}
-
-function saveGroup(group: PiggyGroup) {
-  try {
-    const groups = getGroups();
-    groups.unshift(group);
-    localStorage.setItem(GROUPS_KEY, JSON.stringify(groups));
-  } catch (e) {
-    console.error(e);
-  }
-}
+type ModalMode = "create" | "join" | "invite";
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -42,55 +26,145 @@ function formatDate(iso: string): string {
   return `${d.getMonth() + 1}월 ${d.getDate()}일 생성`;
 }
 
-// ─── 친구 / 그룹 목록 페이지 ─────────────────────────
 export default function FriendsPage() {
-  const [groups,     setGroups]     = useState<PiggyGroup[]>([]);
-  const [showModal,  setShowModal]  = useState(false);
-  const [groupName,  setGroupName]  = useState("");
-  const [saving,     setSaving]     = useState(false);
-  const [done,       setDone]       = useState(false);
+  const [groups,      setGroups]      = useState<PiggyGroup[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [modalMode,   setModalMode]   = useState<ModalMode | null>(null);
+  const [groupName,   setGroupName]   = useState("");
+  const [joinCode,    setJoinCode]    = useState("");
+  const [saving,      setSaving]      = useState(false);
+  const [done,        setDone]        = useState(false);
+  const [error,       setError]       = useState("");
+  const [inviteGroup, setInviteGroup] = useState<PiggyGroup | null>(null);
+  const [copied,      setCopied]      = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    setGroups(getGroups());
-  }, []);
+  const nickname = getProfile()?.nickname ?? "익명";
 
-  // 모달 열릴 때 input 포커스
-  useEffect(() => {
-    if (showModal) {
-      setTimeout(() => inputRef.current?.focus(), 200);
+  async function loadGroups() {
+    setLoading(true);
+    // 내가 참가한 그룹 목록
+    const { data: memberRows } = await supabase
+      .from("group_members")
+      .select("group_id")
+      .eq("nickname", nickname);
+
+    if (!memberRows || memberRows.length === 0) {
+      setGroups([]);
+      setLoading(false);
+      return;
     }
-  }, [showModal]);
 
-  const openModal  = () => { setGroupName(""); setDone(false); setShowModal(true); };
-  const closeModal = () => { setShowModal(false); setGroupName(""); setSaving(false); setDone(false); };
+    const groupIds = memberRows.map(r => r.group_id);
+    const { data: groupRows } = await supabase
+      .from("groups")
+      .select("*")
+      .in("id", groupIds)
+      .order("created_at", { ascending: false });
 
-  const handleCreate = () => {
+    if (!groupRows) { setGroups([]); setLoading(false); return; }
+
+    // 각 그룹 멤버 수
+    const withCounts = await Promise.all(
+      groupRows.map(async g => {
+        const { count } = await supabase
+          .from("group_members")
+          .select("*", { count: "exact", head: true })
+          .eq("group_id", g.id);
+        return { ...g, member_count: count ?? 1 };
+      })
+    );
+    setGroups(withCounts);
+    setLoading(false);
+  }
+
+  useEffect(() => { loadGroups(); }, []);
+
+  useEffect(() => {
+    if (modalMode) setTimeout(() => inputRef.current?.focus(), 200);
+  }, [modalMode]);
+
+  function openCreate() { setGroupName(""); setDone(false); setError(""); setModalMode("create"); }
+  function openJoin()   { setJoinCode("");  setDone(false); setError(""); setModalMode("join"); }
+  function closeModal() { setModalMode(null); setSaving(false); setDone(false); setError(""); setInviteGroup(null); }
+
+  async function handleCreate() {
     if (!groupName.trim() || saving) return;
     setSaving(true);
-    setTimeout(() => {
-      const group: PiggyGroup = {
-        id: Date.now().toString(),
-        name: groupName.trim(),
-        createdAt: new Date().toISOString(),
-      };
-      saveGroup(group);
-      setGroups(getGroups());
-      setSaving(false);
-      setDone(true);
-      setTimeout(() => closeModal(), 900);
-    }, 600);
-  };
+    setError("");
 
-  const canCreate = groupName.trim().length > 0 && !saving;
+    let code = generateInviteCode();
+    // 중복 코드 방지
+    let { data: existing } = await supabase.from("groups").select("id").eq("invite_code", code);
+    while (existing && existing.length > 0) {
+      code = generateInviteCode();
+      ({ data: existing } = await supabase.from("groups").select("id").eq("invite_code", code));
+    }
+
+    const { data: group, error: gErr } = await supabase
+      .from("groups")
+      .insert({ name: groupName.trim(), invite_code: code })
+      .select()
+      .single();
+
+    if (gErr || !group) { setError("그룹 생성에 실패했어요."); setSaving(false); return; }
+
+    await supabase.from("group_members").insert({ group_id: group.id, nickname });
+
+    setSaving(false);
+    setDone(true);
+    await loadGroups();
+    setTimeout(() => {
+      closeModal();
+      setInviteGroup(group);
+      setModalMode("invite");
+    }, 900);
+  }
+
+  async function handleJoin() {
+    if (!joinCode.trim() || saving) return;
+    setSaving(true);
+    setError("");
+
+    const { data: group } = await supabase
+      .from("groups")
+      .select("*")
+      .eq("invite_code", joinCode.trim().toUpperCase())
+      .single();
+
+    if (!group) { setError("존재하지 않는 코드예요. 다시 확인해주세요."); setSaving(false); return; }
+
+    // 이미 멤버인지 확인
+    const { data: already } = await supabase
+      .from("group_members")
+      .select("id")
+      .eq("group_id", group.id)
+      .eq("nickname", nickname)
+      .single();
+
+    if (already) { setError("이미 참가한 그룹이에요!"); setSaving(false); return; }
+
+    await supabase.from("group_members").insert({ group_id: group.id, nickname });
+
+    setSaving(false);
+    setDone(true);
+    await loadGroups();
+    setTimeout(() => closeModal(), 1200);
+  }
+
+  function handleCopy(code: string) {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
 
   return (
     <>
       <style>{css}</style>
-
       <div className="shell">
 
-        {/* ── 상태바 ── */}
+        {/* 상태바 */}
         <div className="status-bar">
           <span className="status-time">9:41</span>
           <div className="status-icons">
@@ -100,11 +174,6 @@ export default function FriendsPage() {
               <rect x="8"  y="1" width="3" height="11" rx="1" fill="#111" />
               <rect x="12" y="0" width="3" height="12" rx="1" fill="#111" />
             </svg>
-            <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
-              <path d="M8 2.5C10.8 2.5 13.3 3.7 15 5.7L16 4.5C14 2.2 11.2 0.8 8 0.8C4.8 0.8 2 2.2 0 4.5L1 5.7C2.7 3.7 5.2 2.5 8 2.5Z" fill="#111"/>
-              <path d="M8 5.5C9.9 5.5 11.6 6.3 12.8 7.6L14 6.4C12.4 4.8 10.3 3.8 8 3.8C5.7 3.8 3.6 4.8 2 6.4L3.2 7.6C4.4 6.3 6.1 5.5 8 5.5Z" fill="#111"/>
-              <circle cx="8" cy="11" r="1.5" fill="#111"/>
-            </svg>
             <svg width="25" height="12" viewBox="0 0 25 12" fill="none">
               <rect x="0" y="1" width="21" height="10" rx="3" stroke="#111" strokeWidth="1"/>
               <rect x="1.5" y="2.5" width="15" height="7" rx="2" fill="#111"/>
@@ -113,76 +182,80 @@ export default function FriendsPage() {
           </div>
         </div>
 
-        {/* ── 헤더: 내 그룹 + + 버튼 ── */}
+        {/* 헤더 */}
         <header className="page-header">
           <h1 className="page-title">내 그룹</h1>
-          <button className="add-btn" onClick={openModal} aria-label="그룹 추가">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5"  y1="12" x2="19" y2="12"/>
-            </svg>
-          </button>
+          <div className="header-btns">
+            <button className="join-btn" onClick={openJoin}>코드 참가</button>
+            <button className="add-btn" onClick={openCreate} aria-label="그룹 추가">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5"  y1="12" x2="19" y2="12"/>
+              </svg>
+            </button>
+          </div>
         </header>
 
-        {/* ── 콘텐츠 ── */}
+        {/* 콘텐츠 */}
         <main className="content">
-          {groups.length === 0 ? (
-
-            /* 빈 상태 */
+          {loading ? (
+            <div className="loading-state">
+              <div className="spinner-lg" />
+              <p>불러오는 중...</p>
+            </div>
+          ) : groups.length === 0 ? (
             <div className="empty-state">
               <div className="empty-pig">🐷</div>
               <p className="empty-title">아직 그룹이 없어요</p>
               <p className="empty-sub">
-                친구들과 함께 절약 챌린지를 시작해보세요!<br />
-                우측 상단 <strong>+</strong> 버튼으로 그룹을 만들어요
+                친구들과 함께 절약 챌린지를 시작해보세요!
               </p>
-              <button className="empty-cta" onClick={openModal}>
-                첫 그룹 만들기
-              </button>
+              <div className="empty-btns">
+                <button className="empty-cta" onClick={openCreate}>그룹 만들기</button>
+                <button className="empty-cta empty-cta--outline" onClick={openJoin}>코드로 참가</button>
+              </div>
             </div>
-
           ) : (
-
-            /* 그룹 목록 */
             <div className="group-list">
               {groups.map(g => (
-                <button key={g.id} className="group-card" onClick={() => window.location.href = `/group/${g.id}`}>
-                  <div className="group-card-left">
-                    <div className="group-avatar">
-                      {g.name.charAt(0)}
-                    </div>
-                    <div className="group-info">
-                      <div className="group-name-row">
-                        <span className="group-name">{g.name}</span>
-                        <span className="group-member-count">1</span>
+                <div key={g.id} className="group-card-wrap">
+                  <button className="group-card" onClick={() => window.location.href = `/group/${g.id}`}>
+                    <div className="group-card-left">
+                      <div className="group-avatar">{g.name.charAt(0)}</div>
+                      <div className="group-info">
+                        <div className="group-name-row">
+                          <span className="group-name">{g.name}</span>
+                          <span className="group-member-count">{g.member_count}</span>
+                        </div>
+                        <span className="group-last">{formatDate(g.created_at)}</span>
                       </div>
-                      <span className="group-last">{formatDate(g.createdAt)}</span>
                     </div>
-                  </div>
-                  <div className="group-card-right">
-                    <span className="group-fire">🔥</span>
-                    <span className="group-fire-count">0</span>
-                  </div>
-                </button>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                      stroke="#CCCCCC" strokeWidth="2" strokeLinecap="round">
+                      <polyline points="9 18 15 12 9 6"/>
+                    </svg>
+                  </button>
+                  <button className="invite-btn" onClick={() => { setInviteGroup(g); setModalMode("invite"); }}>
+                    초대 코드 공유
+                  </button>
+                </div>
               ))}
             </div>
-
           )}
-
           <div style={{ height: 32 }} />
         </main>
 
-        {/* ── 하단 네비게이션 ── */}
+        {/* 하단 네비게이션 */}
         <nav className="bottom-nav">
-          <Link href="/" className="nav-item" aria-label="홈">
+          <Link href="/" className="nav-item">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 9.5L12 3L21 9.5V20a1 1 0 0 1-1 1H15v-6H9v6H4a1 1 0 0 1-1-1V9.5z"/>
             </svg>
             <span>홈</span>
           </Link>
-          <Link href="/friends" className="nav-item nav-item--active" aria-label="친구">
+          <Link href="/friends" className="nav-item nav-item--active">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="9" cy="7" r="4"/>
@@ -194,29 +267,21 @@ export default function FriendsPage() {
           </Link>
         </nav>
 
-        {/* ── 홈 인디케이터 ── */}
-        <div className="home-indicator">
-          <div className="home-pill" />
-        </div>
+        <div className="home-indicator"><div className="home-pill" /></div>
 
-        {/* ── 그룹 생성 모달 (Nickname 스타일) ── */}
-        {showModal && (
+        {/* ── 그룹 만들기 모달 ── */}
+        {modalMode === "create" && (
           <>
-            {/* 오버레이 */}
             <div className="modal-overlay" onClick={closeModal} />
-
-            {/* 바텀 시트 */}
-            <div className={`modal-sheet ${showModal ? "modal-sheet--open" : ""}`}>
+            <div className="modal-sheet">
               <div className="modal-handle" />
-
               {done ? (
-                /* 완료 상태 */
                 <div className="modal-done">
                   <span className="modal-done-icon">🎉</span>
                   <p className="modal-done-text">그룹이 만들어졌어요!</p>
+                  <p className="modal-done-sub">초대 코드를 공유해서 친구를 초대하세요</p>
                 </div>
               ) : (
-                /* 입력 상태 */
                 <>
                   <div className="modal-body">
                     <p className="modal-label">그룹 이름을 입력하세요</p>
@@ -228,35 +293,103 @@ export default function FriendsPage() {
                         placeholder="예) 지독한 21학번, 절약왕 모임"
                         value={groupName}
                         maxLength={20}
-                        onChange={e => setGroupName(e.target.value)}
+                        onChange={e => { setGroupName(e.target.value); setError(""); }}
                         onKeyDown={e => { if (e.key === "Enter") handleCreate(); }}
                       />
                       {groupName && (
                         <button className="modal-input-clear" onClick={() => setGroupName("")}>
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                             stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                            <line x1="18" y1="6"  x2="6"  y2="18"/>
-                            <line x1="6"  y1="6"  x2="18" y2="18"/>
+                            <line x1="18" y1="6" x2="6"  y2="18"/>
+                            <line x1="6"  y1="6" x2="18" y2="18"/>
                           </svg>
                         </button>
                       )}
                     </div>
-                    {groupName && (
-                      <p className="modal-count">{groupName.length} / 20</p>
-                    )}
+                    {error && <p className="modal-error">{error}</p>}
                   </div>
-
                   <div className="modal-footer">
                     <button
-                      className={`modal-btn-save ${!canCreate ? "modal-btn-save--disabled" : ""} ${saving ? "modal-btn-save--loading" : ""}`}
+                      className={`modal-btn-save ${!groupName.trim() ? "modal-btn-save--disabled" : ""}`}
                       onClick={handleCreate}
-                      disabled={!canCreate}
+                      disabled={!groupName.trim() || saving}
                     >
-                      {saving ? <span className="spinner" /> : "저장하기"}
+                      {saving ? <span className="spinner" /> : "그룹 만들기"}
                     </button>
                   </div>
                 </>
               )}
+            </div>
+          </>
+        )}
+
+        {/* ── 코드로 참가 모달 ── */}
+        {modalMode === "join" && (
+          <>
+            <div className="modal-overlay" onClick={closeModal} />
+            <div className="modal-sheet">
+              <div className="modal-handle" />
+              {done ? (
+                <div className="modal-done">
+                  <span className="modal-done-icon">🥳</span>
+                  <p className="modal-done-text">그룹에 참가했어요!</p>
+                </div>
+              ) : (
+                <>
+                  <div className="modal-body">
+                    <p className="modal-label">초대 코드를 입력하세요</p>
+                    <p className="modal-sublabel">친구에게 받은 6자리 코드를 입력하세요</p>
+                    <div className={`modal-input-wrap ${joinCode ? "modal-input-wrap--filled" : ""}`}>
+                      <input
+                        ref={inputRef}
+                        className="modal-input modal-input--code"
+                        type="text"
+                        placeholder="예) AB3D5F"
+                        value={joinCode}
+                        maxLength={6}
+                        onChange={e => { setJoinCode(e.target.value.toUpperCase()); setError(""); }}
+                        onKeyDown={e => { if (e.key === "Enter") handleJoin(); }}
+                      />
+                    </div>
+                    {error && <p className="modal-error">{error}</p>}
+                  </div>
+                  <div className="modal-footer">
+                    <button
+                      className={`modal-btn-save ${!joinCode.trim() ? "modal-btn-save--disabled" : ""}`}
+                      onClick={handleJoin}
+                      disabled={!joinCode.trim() || saving}
+                    >
+                      {saving ? <span className="spinner" /> : "참가하기"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── 초대 코드 공유 모달 ── */}
+        {modalMode === "invite" && inviteGroup && (
+          <>
+            <div className="modal-overlay" onClick={closeModal} />
+            <div className="modal-sheet">
+              <div className="modal-handle" />
+              <div className="modal-body">
+                <p className="modal-label">친구 초대하기</p>
+                <p className="modal-sublabel">아래 코드를 친구에게 공유하세요</p>
+                <div className="invite-code-box">
+                  <span className="invite-code-text">{inviteGroup.invite_code}</span>
+                  <button className="invite-copy-btn" onClick={() => handleCopy(inviteGroup.invite_code)}>
+                    {copied ? "복사됨 ✓" : "복사"}
+                  </button>
+                </div>
+                <p className="invite-hint">
+                  친구가 그룹 탭에서 <strong>"코드 참가"</strong>를 누르고<br />이 코드를 입력하면 참가할 수 있어요!
+                </p>
+              </div>
+              <div className="modal-footer">
+                <button className="modal-btn-save" onClick={closeModal}>확인</button>
+              </div>
             </div>
           </>
         )}
@@ -266,450 +399,198 @@ export default function FriendsPage() {
   );
 }
 
-// ─── 스타일 ─────────────────────────────────────────
 const css = `
-  /* ── 앱 셸 ── */
   .shell {
-    width: 100%;
-    max-width: 402px;
-    height: 100svh;
-    margin: 0 auto;
-    background: #FFFFFF;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
-    position: relative;
-    -webkit-tap-highlight-color: transparent;
+    width: 100%; max-width: 402px; height: 100svh; margin: 0 auto;
+    background: #FFFFFF; display: flex; flex-direction: column;
+    overflow: hidden; font-family: 'Pretendard', -apple-system, sans-serif;
+    position: relative; -webkit-tap-highlight-color: transparent;
   }
-
-  /* ── 상태바 (44px) ── */
   .status-bar {
-    height: 44px;
-    padding: 14px 20px 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-    background: #FFFFFF;
+    height: 44px; padding: 14px 20px 0; display: flex;
+    align-items: center; justify-content: space-between; flex-shrink: 0;
   }
-  .status-time {
-    font-size: 15px;
-    font-weight: 700;
-    color: #111111;
-    letter-spacing: -0.02em;
-  }
-  .status-icons {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  /* ── 헤더 ── */
+  .status-time { font-size: 15px; font-weight: 700; color: #111; letter-spacing: -0.02em; }
+  .status-icons { display: flex; align-items: center; gap: 6px; }
   .page-header {
-    height: 60px;
-    padding: 0 20px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-    background: #FFFFFF;
+    height: 60px; padding: 0 20px; display: flex; align-items: center;
+    justify-content: space-between; flex-shrink: 0;
     border-bottom: 1px solid #F1F1F5;
   }
-  .page-title {
-    font-size: 22px;
-    font-weight: 800;
-    color: #111111;
-    letter-spacing: -0.04em;
+  .page-title { font-size: 22px; font-weight: 800; color: #111; letter-spacing: -0.04em; }
+  .header-btns { display: flex; align-items: center; gap: 8px; }
+  .join-btn {
+    height: 34px; padding: 0 14px; background: #F1F1F5; color: #444;
+    font-family: 'Pretendard', sans-serif; font-size: 13px; font-weight: 600;
+    border: none; border-radius: 100px; cursor: pointer; transition: all 0.15s;
   }
+  .join-btn:active { background: #E5E5EC; }
   .add-btn {
-    width: 36px;
-    height: 36px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #111111;
-    color: #FFFFFF;
-    border: none;
-    border-radius: 50%;
-    cursor: pointer;
+    width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+    background: #111; color: #fff; border: none; border-radius: 50%; cursor: pointer;
     transition: all 0.15s;
-    -webkit-tap-highlight-color: transparent;
   }
-  .add-btn:active { background: #333333; transform: scale(0.94); }
-
-  /* ── 스크롤 콘텐츠 ── */
-  .content {
-    flex: 1;
-    overflow-y: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-  }
+  .add-btn:active { background: #333; transform: scale(0.94); }
+  .content { flex: 1; overflow-y: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
   .content::-webkit-scrollbar { display: none; }
-
-  /* ── 빈 상태 ── */
+  .loading-state {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 80px 0; gap: 16px; color: #BBBBBB; font-size: 14px;
+  }
+  .spinner-lg {
+    width: 32px; height: 32px; border-radius: 50%;
+    border: 3px solid #F1F1F5; border-top-color: #FF2A7A;
+    animation: spin 0.7s linear infinite;
+  }
   .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 60px 32px 40px;
-    gap: 10px;
-    min-height: 60%;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 60px 32px 40px; gap: 10px;
   }
-  .empty-pig {
-    font-size: 56px;
-    line-height: 1;
-    margin-bottom: 8px;
-    animation: pigBounce 1.6s ease-in-out infinite;
-  }
-  .empty-title {
-    font-size: 18px;
-    font-weight: 700;
-    color: #111111;
-    letter-spacing: -0.03em;
-  }
-  .empty-sub {
-    font-size: 13px;
-    color: #767676;
-    text-align: center;
-    line-height: 1.7;
-    letter-spacing: -0.01em;
-  }
-  .empty-sub strong { color: #FF2A7A; font-weight: 700; }
+  .empty-pig { font-size: 56px; animation: pigBounce 1.6s ease-in-out infinite; }
+  .empty-title { font-size: 18px; font-weight: 700; color: #111; letter-spacing: -0.03em; }
+  .empty-sub { font-size: 13px; color: #767676; text-align: center; line-height: 1.7; }
+  .empty-btns { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 8px; }
   .empty-cta {
-    margin-top: 16px;
-    height: 48px;
-    padding: 0 28px;
-    background: #FF2A7A;
-    color: #FFFFFF;
-    font-family: 'Pretendard', sans-serif;
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    border: none;
-    border-radius: 100px;
-    cursor: pointer;
-    box-shadow: 0 4px 16px rgba(255, 42, 122, 0.30);
-    transition: all 0.15s;
-    -webkit-tap-highlight-color: transparent;
+    height: 48px; padding: 0 28px; background: #FF2A7A; color: #fff;
+    font-family: 'Pretendard', sans-serif; font-size: 15px; font-weight: 700;
+    border: none; border-radius: 100px; cursor: pointer;
+    box-shadow: 0 4px 16px rgba(255,42,122,0.30); transition: all 0.15s;
   }
-  .empty-cta:active { transform: scale(0.96); box-shadow: 0 2px 8px rgba(255, 42, 122, 0.20); }
-
-  /* ── 그룹 목록 ── */
-  .group-list {
-    padding: 12px 20px 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0;
+  .empty-cta--outline {
+    background: #fff; color: #FF2A7A; border: 1.5px solid #FF2A7A; box-shadow: none;
   }
+  .empty-cta:active { transform: scale(0.96); }
+  .group-list { padding: 12px 20px 0; display: flex; flex-direction: column; gap: 0; }
+  .group-card-wrap { border-bottom: 1px solid #F7F7F7; }
+  .group-card-wrap:first-child { border-top: 1px solid #F7F7F7; }
   .group-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 0;
-    border-bottom: 1px solid #F7F7F7;
-    background: none;
-    border-left: none;
-    border-right: none;
-    border-top: none;
-    cursor: pointer;
-    width: 100%;
-    text-align: left;
-    -webkit-tap-highlight-color: transparent;
-    transition: background 0.12s;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 0 8px; background: none; border: none;
+    cursor: pointer; width: 100%; text-align: left; transition: background 0.12s;
   }
-  .group-card:first-child { border-top: 1px solid #F7F7F7; }
   .group-card:active { background: #FAFAFA; }
-  .group-card-left {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex: 1;
-    min-width: 0;
-  }
+  .group-card-left { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
   .group-avatar {
-    width: 46px;
-    height: 46px;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #111111 0%, #444444 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    font-weight: 800;
-    color: #FFFFFF;
-    letter-spacing: -0.02em;
-    flex-shrink: 0;
+    width: 46px; height: 46px; border-radius: 16px;
+    background: linear-gradient(135deg, #111 0%, #444 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 800; color: #fff; flex-shrink: 0;
   }
-  .group-info {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-  }
-  .group-name-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
+  .group-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .group-name-row { display: flex; align-items: center; gap: 6px; }
   .group-name {
-    font-size: 15px;
-    font-weight: 700;
-    color: #111111;
-    letter-spacing: -0.02em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 160px;
+    font-size: 15px; font-weight: 700; color: #111; letter-spacing: -0.02em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
   }
   .group-member-count {
-    font-size: 12px;
-    font-weight: 600;
-    color: #FFFFFF;
-    background: #767676;
-    padding: 1px 7px;
-    border-radius: 100px;
-    flex-shrink: 0;
+    font-size: 12px; font-weight: 600; color: #fff;
+    background: #767676; padding: 1px 7px; border-radius: 100px; flex-shrink: 0;
   }
-  .group-last {
-    font-size: 12px;
-    color: #BBBBBB;
-    letter-spacing: -0.01em;
+  .group-last { font-size: 12px; color: #BBBBBB; }
+  .invite-btn {
+    margin: 4px 0 14px; height: 34px; width: 100%;
+    background: #FFF0F6; color: #FF2A7A;
+    font-family: 'Pretendard', sans-serif; font-size: 13px; font-weight: 600;
+    border: 1px solid #FFD0E5; border-radius: 10px; cursor: pointer; transition: all 0.15s;
   }
-  .group-card-right {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 2px;
-    flex-shrink: 0;
-    margin-left: 12px;
-  }
-  .group-fire { font-size: 18px; line-height: 1; }
-  .group-fire-count {
-    font-size: 12px;
-    font-weight: 700;
-    color: #767676;
-    letter-spacing: -0.01em;
-  }
-
-  /* ── 하단 네비게이션 (64px) ── */
+  .invite-btn:active { background: #FFE0EF; }
   .bottom-nav {
-    height: 64px;
-    display: flex;
-    align-items: center;
-    background: #FFFFFF;
-    border-top: 1px solid #F1F1F5;
-    flex-shrink: 0;
-    padding: 0 40px;
+    height: 64px; display: flex; align-items: center; background: #fff;
+    border-top: 1px solid #F1F1F5; flex-shrink: 0; padding: 0 40px;
   }
   .nav-item {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 3px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-family: 'Pretendard', sans-serif;
-    font-size: 10px;
-    font-weight: 600;
-    color: #CCCCCC;
-    letter-spacing: -0.01em;
-    transition: color 0.15s;
-    -webkit-tap-highlight-color: transparent;
-    padding: 0;
-    text-decoration: none;
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    background: none; border: none; cursor: pointer;
+    font-family: 'Pretendard', sans-serif; font-size: 10px; font-weight: 600;
+    color: #CCCCCC; letter-spacing: -0.01em; transition: color 0.15s;
+    padding: 0; text-decoration: none;
   }
   .nav-item svg { stroke: #CCCCCC; }
   .nav-item--active { color: #FF2A7A; }
   .nav-item--active svg { stroke: #FF2A7A; }
-
-  /* ── 홈 인디케이터 (34px) ── */
   .home-indicator {
-    height: 34px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    background: #FFFFFF;
+    height: 34px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
-  .home-pill {
-    width: 134px;
-    height: 5px;
-    background: #111111;
-    border-radius: 3px;
-  }
-
-  /* ── 모달 오버레이 ── */
+  .home-pill { width: 134px; height: 5px; background: #111; border-radius: 3px; }
   .modal-overlay {
-    position: absolute;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 40;
+    position: absolute; inset: 0; background: rgba(0,0,0,0.45); z-index: 40;
     animation: fadeIn 0.2s ease;
   }
-
-  /* ── 바텀 시트 ── */
   .modal-sheet {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: #FFFFFF;
-    border-radius: 24px 24px 0 0;
-    z-index: 50;
+    position: absolute; bottom: 0; left: 0; right: 0; background: #fff;
+    border-radius: 24px 24px 0 0; z-index: 50;
     padding-bottom: max(34px, env(safe-area-inset-bottom));
     animation: slideUp 0.3s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .modal-handle {
-    width: 40px;
-    height: 4px;
-    background: #E5E5EC;
-    border-radius: 100px;
-    margin: 14px auto 0;
+    width: 40px; height: 4px; background: #E5E5EC;
+    border-radius: 100px; margin: 14px auto 0;
   }
-  .modal-body {
-    padding: 28px 24px 0;
-  }
-  .modal-label {
-    font-size: 16px;
-    font-weight: 700;
-    color: #111111;
-    letter-spacing: -0.03em;
-    margin-bottom: 16px;
-  }
+  .modal-body { padding: 28px 24px 0; }
+  .modal-label { font-size: 16px; font-weight: 700; color: #111; letter-spacing: -0.03em; margin-bottom: 6px; }
+  .modal-sublabel { font-size: 13px; color: #767676; margin-bottom: 16px; }
   .modal-input-wrap {
-    display: flex;
-    align-items: center;
-    height: 56px;
-    padding: 0 16px;
-    background: #F7F7F7;
-    border: 1.5px solid transparent;
-    border-radius: 16px;
-    transition: all 0.2s;
+    display: flex; align-items: center; height: 56px; padding: 0 16px;
+    background: #F7F7F7; border: 1.5px solid transparent; border-radius: 16px; transition: all 0.2s;
   }
-  .modal-input-wrap:focus-within {
-    background: #FFFFFF;
-    border-color: #FF2A7A;
-    box-shadow: 0 0 0 3px rgba(255, 42, 122, 0.10);
-  }
-  .modal-input-wrap--filled {
-    background: #FFFFFF;
-    border-color: #E5E5EC;
-  }
+  .modal-input-wrap:focus-within { background: #fff; border-color: #FF2A7A; box-shadow: 0 0 0 3px rgba(255,42,122,0.10); }
+  .modal-input-wrap--filled { background: #fff; border-color: #E5E5EC; }
   .modal-input {
-    flex: 1;
-    height: 100%;
-    background: transparent;
-    border: none;
-    outline: none;
-    font-family: 'Pretendard', sans-serif;
-    font-size: 15px;
-    font-weight: 500;
-    color: #111111;
-    letter-spacing: -0.01em;
+    flex: 1; height: 100%; background: transparent; border: none; outline: none;
+    font-family: 'Pretendard', sans-serif; font-size: 15px; font-weight: 500; color: #111;
   }
+  .modal-input--code { font-size: 20px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
   .modal-input::placeholder { color: #BBBBBB; font-weight: 400; }
   .modal-input-clear {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: #BBBBBB;
-    display: flex;
-    align-items: center;
-    padding: 4px;
-    flex-shrink: 0;
-    -webkit-tap-highlight-color: transparent;
+    background: none; border: none; cursor: pointer; color: #BBBBBB;
+    display: flex; align-items: center; padding: 4px;
   }
-  .modal-input-clear:hover { color: #767676; }
-  .modal-count {
-    margin-top: 6px;
-    padding-left: 4px;
-    font-size: 12px;
-    color: #BBBBBB;
-    text-align: right;
-  }
-
-  /* ── 모달 푸터 ── */
-  .modal-footer {
-    padding: 20px 24px 8px;
-  }
+  .modal-error { margin-top: 8px; font-size: 13px; color: #FF2A7A; padding-left: 4px; }
+  .modal-footer { padding: 20px 24px 8px; }
   .modal-btn-save {
-    width: 100%;
-    height: 56px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #FF2A7A;
-    color: #FFFFFF;
-    font-family: 'Pretendard', sans-serif;
-    font-size: 16px;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    border: none;
-    border-radius: 16px;
-    cursor: pointer;
-    box-shadow: 0 6px 20px rgba(255, 42, 122, 0.30);
-    transition: all 0.2s;
-    -webkit-tap-highlight-color: transparent;
+    width: 100%; height: 56px; display: flex; align-items: center; justify-content: center;
+    background: #FF2A7A; color: #fff;
+    font-family: 'Pretendard', sans-serif; font-size: 16px; font-weight: 700;
+    border: none; border-radius: 16px; cursor: pointer;
+    box-shadow: 0 6px 20px rgba(255,42,122,0.30); transition: all 0.2s;
   }
-  .modal-btn-save:not(:disabled):active {
-    transform: scale(0.97);
-    box-shadow: 0 3px 10px rgba(255, 42, 122, 0.20);
-  }
-  .modal-btn-save--disabled {
-    background: #F1F1F5;
-    color: #BBBBBB;
-    box-shadow: none;
-    cursor: not-allowed;
-  }
-  .modal-btn-save--loading { pointer-events: none; }
-
-  /* ── 완료 상태 ── */
+  .modal-btn-save:not(:disabled):active { transform: scale(0.97); }
+  .modal-btn-save--disabled { background: #F1F1F5; color: #BBBBBB; box-shadow: none; cursor: not-allowed; }
   .modal-done {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 36px 24px 40px;
-    gap: 12px;
-    animation: fadeUp 0.3s ease;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 36px 24px 40px; gap: 10px; animation: fadeUp 0.3s ease;
   }
-  .modal-done-icon { font-size: 48px; line-height: 1; }
-  .modal-done-text {
-    font-size: 17px;
-    font-weight: 700;
-    color: #111111;
-    letter-spacing: -0.03em;
+  .modal-done-icon { font-size: 48px; }
+  .modal-done-text { font-size: 17px; font-weight: 700; color: #111; letter-spacing: -0.03em; }
+  .modal-done-sub { font-size: 13px; color: #767676; text-align: center; }
+  .invite-code-box {
+    display: flex; align-items: center; justify-content: space-between;
+    background: #F7F7F7; border: 1.5px solid #E5E5EC; border-radius: 16px;
+    padding: 16px 20px; margin-bottom: 16px;
   }
-
-  /* ── 스피너 ── */
+  .invite-code-text {
+    font-size: 28px; font-weight: 800; color: #111;
+    letter-spacing: 0.18em; font-variant-numeric: tabular-nums;
+  }
+  .invite-copy-btn {
+    height: 36px; padding: 0 16px; background: #FF2A7A; color: #fff;
+    font-family: 'Pretendard', sans-serif; font-size: 14px; font-weight: 700;
+    border: none; border-radius: 100px; cursor: pointer; transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .invite-copy-btn:active { transform: scale(0.96); }
+  .invite-hint {
+    font-size: 13px; color: #767676; line-height: 1.7; text-align: center;
+  }
+  .invite-hint strong { color: #111; font-weight: 700; }
   .spinner {
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    border: 2.5px solid rgba(255, 255, 255, 0.35);
-    border-top-color: #fff;
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 2.5px solid rgba(255,255,255,0.35); border-top-color: #fff;
     animation: spin 0.7s linear infinite;
   }
-
-  /* ── 키프레임 ── */
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to   { opacity: 1; }
-  }
-  @keyframes slideUp {
-    from { transform: translateY(100%); }
-    to   { transform: translateY(0); }
-  }
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes pigBounce {
-    0%, 100% { transform: translateY(0); }
-    50%       { transform: translateY(-6px); }
-  }
+  @keyframes pigBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 `;
