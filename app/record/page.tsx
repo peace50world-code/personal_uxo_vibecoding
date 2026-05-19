@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { type PiggyRecord, STORAGE_KEY } from "../page";
+import { getProfile } from "../onboarding/page";
 
 // ─── 상황 태그 ────────────────────────────────────────
 const SITUATIONS = ["차액 아끼기", "배달 참기", "커피 참기", "쇼핑 참기", "택시 참기", "간식 참기"];
@@ -32,8 +33,10 @@ export default function RecordPage() {
 
   const handleSave = () => {
     if (amount <= 0) return;
+    const profile = getProfile();
     const record: PiggyRecord = {
       id: Date.now().toString(),
+      userId: profile?.userId,
       amount,
       situation: situation,
       memo: memo.trim(),

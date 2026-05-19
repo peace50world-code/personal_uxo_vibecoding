@@ -2,23 +2,38 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { getProfile } from "../onboarding/page";
 
 // ─── 그룹 데이터 타입 ─────────────────────────────────
-interface PiggyGroup {
+export interface GroupMember {
+  userId: string;
+  nickname: string;
+  joinedAt: string;
+}
+
+export interface PiggyGroup {
   id: string;
   name: string;
   createdAt: string;
+  inviteCode: string;
+  memberCount: number;
+  members: GroupMember[];
 }
 
-const GROUPS_KEY = "piggy-groups";
+export const GROUPS_KEY = "piggy-groups";
 
-function getGroups(): PiggyGroup[] {
+export function getGroups(): PiggyGroup[] {
   if (typeof window === "undefined") return [];
   try {
     return JSON.parse(localStorage.getItem(GROUPS_KEY) ?? "[]");
   } catch {
     return [];
   }
+}
+
+function generateInviteCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
 function saveGroup(group: PiggyGroup) {
@@ -29,6 +44,10 @@ function saveGroup(group: PiggyGroup) {
   } catch (e) {
     console.error(e);
   }
+}
+
+function findGroupByCode(code: string): PiggyGroup | null {
+  return getGroups().find(g => g.inviteCode === code.toUpperCase()) ?? null;
 }
 
 function formatDate(iso: string): string {
@@ -49,18 +68,27 @@ export default function FriendsPage() {
   const [groupName,  setGroupName]  = useState("");
   const [saving,     setSaving]     = useState(false);
   const [done,       setDone]       = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  // 코드 참가 모달
+  const [showJoin,   setShowJoin]   = useState(false);
+  const [joinCode,   setJoinCode]   = useState("");
+  const [joinError,  setJoinError]  = useState(false);
+  const [joinDone,   setJoinDone]   = useState<string | null>(null); // 참가한 그룹 id
+  const inputRef  = useRef<HTMLInputElement>(null);
+  const joinRef   = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setGroups(getGroups());
   }, []);
 
-  // 모달 열릴 때 input 포커스
+  // 그룹 만들기 모달 포커스
   useEffect(() => {
-    if (showModal) {
-      setTimeout(() => inputRef.current?.focus(), 200);
-    }
+    if (showModal) setTimeout(() => inputRef.current?.focus(), 200);
   }, [showModal]);
+
+  // 코드 참가 모달 포커스
+  useEffect(() => {
+    if (showJoin) setTimeout(() => joinRef.current?.focus(), 200);
+  }, [showJoin]);
 
   const openModal  = () => { setGroupName(""); setDone(false); setShowModal(true); };
   const closeModal = () => { setShowModal(false); setGroupName(""); setSaving(false); setDone(false); };
@@ -69,10 +97,17 @@ export default function FriendsPage() {
     if (!groupName.trim() || saving) return;
     setSaving(true);
     setTimeout(() => {
+      const profile = getProfile();
+      const creator: GroupMember = profile
+        ? { userId: profile.userId, nickname: profile.nickname, joinedAt: new Date().toISOString() }
+        : { userId: "unknown", nickname: "나", joinedAt: new Date().toISOString() };
       const group: PiggyGroup = {
         id: Date.now().toString(),
         name: groupName.trim(),
         createdAt: new Date().toISOString(),
+        inviteCode: generateInviteCode(),
+        memberCount: 1,
+        members: [creator],
       };
       saveGroup(group);
       setGroups(getGroups());
@@ -81,6 +116,42 @@ export default function FriendsPage() {
       setTimeout(() => closeModal(), 900);
     }, 600);
   };
+
+  const handleJoin = () => {
+    const code = joinCode.trim().toUpperCase();
+    if (code.length < 6) return;
+    const found = findGroupByCode(code);
+    if (!found) {
+      setJoinError(true);
+      setTimeout(() => setJoinError(false), 2000);
+      return;
+    }
+    // 현재 사용자를 멤버에 추가 (중복 방지)
+    const profile = getProfile();
+    if (profile) {
+      const alreadyMember = (found.members ?? []).some(m => m.userId === profile.userId);
+      if (!alreadyMember) {
+        const newMember: GroupMember = { userId: profile.userId, nickname: profile.nickname, joinedAt: new Date().toISOString() };
+        const updatedGroup: PiggyGroup = {
+          ...found,
+          members: [...(found.members ?? []), newMember],
+          memberCount: (found.memberCount ?? 0) + 1,
+        };
+        const all = getGroups();
+        localStorage.setItem(GROUPS_KEY, JSON.stringify(all.map(g => g.id === found.id ? updatedGroup : g)));
+      }
+    }
+    setJoinDone(found.id);
+    setTimeout(() => {
+      setShowJoin(false);
+      setJoinCode("");
+      setJoinDone(null);
+      window.location.href = `/group/${found.id}`;
+    }, 1000);
+  };
+
+  const openJoin  = () => { setJoinCode(""); setJoinError(false); setJoinDone(null); setShowJoin(true); };
+  const closeJoin = () => { setShowJoin(false); setJoinCode(""); setJoinError(false); setJoinDone(null); };
 
   const canCreate = groupName.trim().length > 0 && !saving;
 
@@ -113,16 +184,25 @@ export default function FriendsPage() {
           </div>
         </div>
 
-        {/* ── 헤더: 내 그룹 + + 버튼 ── */}
+        {/* ── 헤더: 내 그룹 + 코드 입력 + + 버튼 ── */}
         <header className="page-header">
           <h1 className="page-title">내 그룹</h1>
-          <button className="add-btn" onClick={openModal} aria-label="그룹 추가">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5"  y1="12" x2="19" y2="12"/>
-            </svg>
-          </button>
+          <div className="header-actions">
+            <button className="icon-btn" onClick={openJoin} aria-label="코드로 참가">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+            </button>
+            <button className="add-btn" onClick={openModal} aria-label="그룹 추가">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5"  y1="12" x2="19" y2="12"/>
+              </svg>
+            </button>
+          </div>
         </header>
 
         {/* ── 콘텐츠 ── */}
@@ -134,12 +214,16 @@ export default function FriendsPage() {
               <div className="empty-pig">🐷</div>
               <p className="empty-title">아직 그룹이 없어요</p>
               <p className="empty-sub">
-                친구들과 함께 절약 챌린지를 시작해보세요!<br />
-                우측 상단 <strong>+</strong> 버튼으로 그룹을 만들어요
+                친구들과 함께 절약 챌린지를 시작해보세요!
               </p>
-              <button className="empty-cta" onClick={openModal}>
-                첫 그룹 만들기
-              </button>
+              <div className="empty-cta-group">
+                <button className="empty-cta" onClick={openModal}>
+                  그룹 만들기
+                </button>
+                <button className="empty-cta-secondary" onClick={openJoin}>
+                  코드로 참가하기
+                </button>
+              </div>
             </div>
 
           ) : (
@@ -155,7 +239,7 @@ export default function FriendsPage() {
                     <div className="group-info">
                       <div className="group-name-row">
                         <span className="group-name">{g.name}</span>
-                        <span className="group-member-count">1</span>
+                        <span className="group-member-count">{g.members?.length ?? g.memberCount ?? 1}</span>
                       </div>
                       <span className="group-last">{formatDate(g.createdAt)}</span>
                     </div>
@@ -198,6 +282,60 @@ export default function FriendsPage() {
         <div className="home-indicator">
           <div className="home-pill" />
         </div>
+
+        {/* ── 코드로 참가 모달 ── */}
+        {showJoin && (
+          <>
+            <div className="modal-overlay" onClick={closeJoin} />
+            <div className="modal-sheet modal-sheet--open">
+              <div className="modal-handle" />
+
+              {joinDone ? (
+                <div className="modal-done">
+                  <span className="modal-done-icon">🎉</span>
+                  <p className="modal-done-text">그룹에 참가했어요!</p>
+                </div>
+              ) : (
+                <>
+                  <div className="modal-body">
+                    <p className="modal-label">초대 코드 입력</p>
+                    <div className={`join-code-wrap ${joinError ? "join-code-wrap--error" : ""} ${joinCode.length === 6 ? "join-code-wrap--filled" : ""}`}>
+                      <input
+                        ref={joinRef}
+                        className="join-code-input"
+                        type="text"
+                        placeholder="AB3D7K"
+                        value={joinCode}
+                        maxLength={6}
+                        autoCapitalize="characters"
+                        onChange={e => {
+                          setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""));
+                          setJoinError(false);
+                        }}
+                        onKeyDown={e => { if (e.key === "Enter") handleJoin(); }}
+                      />
+                    </div>
+                    {joinError ? (
+                      <p className="join-error-text">유효하지 않은 초대 코드예요</p>
+                    ) : (
+                      <p className="join-hint">친구에게 받은 6자리 코드를 입력하세요</p>
+                    )}
+                  </div>
+
+                  <div className="modal-footer">
+                    <button
+                      className={`modal-btn-save ${joinCode.length < 6 ? "modal-btn-save--disabled" : ""}`}
+                      onClick={handleJoin}
+                      disabled={joinCode.length < 6}
+                    >
+                      참가하기
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        )}
 
         {/* ── 그룹 생성 모달 (Nickname 스타일) ── */}
         {showModal && (
@@ -322,6 +460,26 @@ const css = `
     color: #111111;
     letter-spacing: -0.04em;
   }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .icon-btn {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #F1F1F5;
+    color: #111111;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .icon-btn:active { background: #E5E5EC; transform: scale(0.94); }
   .add-btn {
     width: 36px;
     height: 36px;
@@ -395,6 +553,97 @@ const css = `
     -webkit-tap-highlight-color: transparent;
   }
   .empty-cta:active { transform: scale(0.96); box-shadow: 0 2px 8px rgba(255, 42, 122, 0.20); }
+
+  .empty-cta-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .empty-cta-secondary {
+    height: 48px;
+    padding: 0 28px;
+    background: transparent;
+    color: #111111;
+    font-family: 'Pretendard', sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    border: 1.5px solid #E5E5EC;
+    border-radius: 100px;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .empty-cta-secondary:active { background: #F7F7F7; transform: scale(0.96); }
+
+  /* ── 코드 입력 필드 ── */
+  .join-code-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 72px;
+    background: #F7F7F7;
+    border: 1.5px solid transparent;
+    border-radius: 16px;
+    transition: all 0.2s;
+    margin-bottom: 10px;
+  }
+  .join-code-wrap:focus-within {
+    background: #FFFFFF;
+    border-color: #FF2A7A;
+    box-shadow: 0 0 0 3px rgba(255, 42, 122, 0.10);
+  }
+  .join-code-wrap--filled {
+    background: #FFFFFF;
+    border-color: #E5E5EC;
+  }
+  .join-code-wrap--error {
+    border-color: #FF3B30 !important;
+    box-shadow: 0 0 0 3px rgba(255, 59, 48, 0.10) !important;
+    animation: shake 0.35s cubic-bezier(.36,.07,.19,.97);
+  }
+  .join-code-input {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: 'Pretendard', -apple-system, monospace, sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    color: #111111;
+    letter-spacing: 0.18em;
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .join-code-input::placeholder {
+    color: #CCCCCC;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    font-size: 22px;
+  }
+  .join-error-text {
+    font-size: 13px;
+    color: #FF3B30;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .join-hint {
+    font-size: 13px;
+    color: #BBBBBB;
+    letter-spacing: -0.01em;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%       { transform: translateX(-6px); }
+    40%       { transform: translateX(6px); }
+    60%       { transform: translateX(-4px); }
+    80%       { transform: translateX(4px); }
+  }
 
   /* ── 그룹 목록 ── */
   .group-list {

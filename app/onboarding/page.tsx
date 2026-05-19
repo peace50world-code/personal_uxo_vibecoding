@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 // ─── 스토리지 ─────────────────────────────────────────
 export interface UserProfile {
+  userId: string;
   nickname: string;
   pin: string;
   createdAt: string;
@@ -12,11 +13,22 @@ export interface UserProfile {
 export const USER_KEY    = "piggy-user";
 export const SESSION_KEY = "piggy-session";
 
+function generateUserId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
 export function getProfile(): UserProfile | null {
   if (typeof window === "undefined") return null;
   try {
     const d = localStorage.getItem(USER_KEY);
-    return d ? JSON.parse(d) : null;
+    if (!d) return null;
+    const profile: UserProfile = JSON.parse(d);
+    // 마이그레이션: userId 없으면 생성
+    if (!profile.userId) {
+      profile.userId = generateUserId();
+      localStorage.setItem(USER_KEY, JSON.stringify(profile));
+    }
+    return profile;
   } catch { return null; }
 }
 export function isLoggedIn(): boolean {
@@ -83,6 +95,7 @@ export default function OnboardingPage() {
     setSubmitting(true);
     setTimeout(() => {
       const profile: UserProfile = {
+        userId: generateUserId(),
         nickname: nickname.trim(),
         pin,
         createdAt: new Date().toISOString(),

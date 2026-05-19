@@ -8,6 +8,7 @@ import { getProfile, isLoggedIn } from "./onboarding/page";
 // ─── 공유 데이터 타입 ─────────────────────────────────
 export interface PiggyRecord {
   id: string;
+  userId?: string;
   amount: number;
   situation: string | null;
   memo: string;
@@ -155,7 +156,13 @@ export default function HomePage() {
     setNickname(profile.nickname);
     setReady(true);
 
-    const load = () => setRecords(getRecords());
+    const load = () => {
+      const all = getRecords();
+      // 내 기록만 필터 (userId 없는 기존 기록은 내 것으로 간주)
+      setRecords(profile.userId
+        ? all.filter(r => !r.userId || r.userId === profile.userId)
+        : all);
+    };
     load();
     window.addEventListener("focus", load);
     return () => window.removeEventListener("focus", load);

@@ -3,19 +3,33 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getRecords, type PiggyRecord } from "../../page";
+import { getProfile } from "../../onboarding/page";
 
 // ─── 타입 ────────────────────────────────────────────
+interface GroupMember {
+  userId: string;
+  nickname: string;
+  joinedAt: string;
+}
+
 interface PiggyGroup {
   id: string;
   name: string;
   createdAt: string;
+  inviteCode?: string;
+  memberCount?: number;
+  members?: GroupMember[];
+}
+
+function generateCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
 interface FeedItem {
   id: string;
-  memberId: string;
+  userId: string;
   memberName: string;
-  memberEmoji: string;
   situation: string;
   amount: number;
   createdAt: string;
@@ -23,9 +37,8 @@ interface FeedItem {
 }
 
 interface RankMember {
-  id: string;
+  userId: string;
   name: string;
-  emoji: string;
   todaySaved: number;
   isMe: boolean;
 }
@@ -44,22 +57,6 @@ const REACTIONS = [
   "현명한 소비생활 👏",
 ];
 
-// ─── 더미 멤버 (프로토타입용) ─────────────────────────
-const todayStr = new Date().toDateString();
-const h = (hours: number) => new Date(Date.now() - hours * 3600000).toISOString();
-const MOCK_MEMBERS: Omit<RankMember, "isMe">[] = [
-  { id: "mock1", name: "예은", emoji: "🌸", todaySaved: 18000 },
-  { id: "mock2", name: "철수", emoji: "🦁", todaySaved: 8000  },
-  { id: "mock3", name: "민지", emoji: "🐰", todaySaved: 0     },
-];
-const MOCK_FEED: Omit<FeedItem, "isMe">[] = [
-  { id: "mf1", memberId: "mock1", memberName: "예은", memberEmoji: "🌸", situation: "택시 참기",   amount: 12000, createdAt: h(0.5) },
-  { id: "mf2", memberId: "mock2", memberName: "철수", memberEmoji: "🦁", situation: "배달 참기",   amount: 8000,  createdAt: h(1.2) },
-  { id: "mf3", memberId: "mock1", memberName: "예은", memberEmoji: "🌸", situation: "커피 참기",   amount: 6000,  createdAt: h(2.0) },
-  { id: "mf4", memberId: "mock2", memberName: "철수", memberEmoji: "🦁", situation: "쇼핑 참기",   amount: 15000, createdAt: h(3.5) },
-  { id: "mf5", memberId: "mock3", memberName: "민지", memberEmoji: "🐰", situation: "간식 참기",   amount: 3000,  createdAt: h(5.0) },
-];
-
 function formatFeedTime(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
   if (diff < 1)  return "방금 전";
@@ -76,51 +73,93 @@ export default function GroupPage() {
   const [tab,         setTab]         = useState<"feed" | "stats">("feed");
   const [feedItems,   setFeedItems]   = useState<FeedItem[]>([]);
   const [rankMembers, setRankMembers] = useState<RankMember[]>([]);
-  // stickerId → 현재 표시 중인 리액션 문구
   const [reactions,   setReactions]   = useState<Record<string, string | null>>({});
-  // stickerId → 누적 리액션 카운트
   const [stickerCount, setStickerCount] = useState<Record<string, number>>({});
+  const [showInvite,  setShowInvite]  = useState(false);
+  const [copied,      setCopied]      = useState(false);
 
   useEffect(() => {
     // 그룹 불러오기
+    let activeGroup: PiggyGroup;
     try {
       const groups: PiggyGroup[] = JSON.parse(localStorage.getItem("piggy-groups") ?? "[]");
       const found = groups.find(g => g.id === id);
       if (!found) { router.push("/friends"); return; }
-      setGroup(found);
+      // 초대 코드 없으면 생성 후 저장
+      if (!found.inviteCode) {
+        const updated = { ...found, inviteCode: generateCode() };
+        const updated_groups = groups.map(g => g.id === id ? updated : g);
+        localStorage.setItem("piggy-groups", JSON.stringify(updated_groups));
+        activeGroup = updated;
+      } else {
+        activeGroup = found;
+      }
+      setGroup(activeGroup);
     } catch { router.push("/friends"); return; }
 
-    // 내 기록 → 피드 아이템 변환
-    const myRecords: PiggyRecord[] = getRecords();
-    const myFeed: FeedItem[] = myRecords.map(r => ({
+    // 현재 로그인 사용자
+    const profile = getProfile();
+    const myUserId = profile?.userId ?? "";
+
+    // 그룹 멤버 정보
+    const members: GroupMember[] = activeGroup.members ?? [];
+    const memberIds = members.map(m => m.userId);
+    const memberNames: Record<string, string> = {};
+    members.forEach(m => { memberNames[m.userId] = m.nickname; });
+
+    // 전체 기록 → 그룹 멤버의 기록만 필터
+    const allRecords: PiggyRecord[] = getRecords();
+    const groupRecords = allRecords.filter(r => r.userId && memberIds.includes(r.userId));
+
+    // 피드 아이템 생성 (최신순)
+    const feed: FeedItem[] = groupRecords.map(r => ({
       id: r.id,
-      memberId: "me",
-      memberName: "나",
-      memberEmoji: "🐷",
-      situation: r.situation ?? (r.memo || "절약 기록"),
+      userId: r.userId!,
+      memberName: memberNames[r.userId!] ?? "멤버",
+      situation: r.situation !== null ? r.situation : (r.memo || "절약 기록"),
       amount: r.amount,
       createdAt: r.createdAt,
-      isMe: true,
-    }));
+      isMe: r.userId === myUserId,
+    })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    setFeedItems(feed);
 
-    // 더미 피드 합치기 → 최신순 정렬
-    const allFeed: FeedItem[] = [
-      ...myFeed,
-      ...MOCK_FEED.map(f => ({ ...f, isMe: false })),
-    ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    setFeedItems(allFeed);
-
-    // 랭킹: 내 오늘 저축 + 더미 멤버
-    const myToday = myRecords
-      .filter(r => new Date(r.createdAt).toDateString() === todayStr)
-      .reduce((s, r) => s + r.amount, 0);
-
-    const allMembers: RankMember[] = [
-      { id: "me", name: "나", emoji: "🐷", todaySaved: myToday, isMe: true },
-      ...MOCK_MEMBERS.map(m => ({ ...m, isMe: false })),
-    ].sort((a, b) => b.todaySaved - a.todaySaved);
-    setRankMembers(allMembers);
+    // 랭킹 생성 (오늘 금액 기준)
+    const todayStr = new Date().toDateString();
+    const todayByUser: Record<string, number> = {};
+    groupRecords.forEach(r => {
+      if (new Date(r.createdAt).toDateString() === todayStr) {
+        todayByUser[r.userId!] = (todayByUser[r.userId!] ?? 0) + r.amount;
+      }
+    });
+    const rankList: RankMember[] = members.map(m => ({
+      userId: m.userId,
+      name: m.nickname,
+      todaySaved: todayByUser[m.userId] ?? 0,
+      isMe: m.userId === myUserId,
+    })).sort((a, b) => b.todaySaved - a.todaySaved);
+    setRankMembers(rankList);
   }, [id, router]);
+
+  const handleCopy = () => {
+    if (!group?.inviteCode) return;
+    const code = group.inviteCode;
+    const markCopied = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
+    const fallback = () => {
+      const el = document.createElement("textarea");
+      el.value = code;
+      el.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.appendChild(el);
+      el.focus(); el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      markCopied();
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(code).then(markCopied).catch(fallback);
+    } else {
+      fallback();
+    }
+  };
 
   const handleSticker = (itemId: string) => {
     const text = REACTIONS[Math.floor(Math.random() * REACTIONS.length)];
@@ -159,7 +198,7 @@ export default function GroupPage() {
           </div>
         </div>
 
-        {/* ── 헤더: ← + 그룹명 ── */}
+        {/* ── 헤더: ← + 그룹명 + 초대 ── */}
         <header className="page-header">
           <button className="back-btn" onClick={() => router.push("/friends")} aria-label="뒤로">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
@@ -171,6 +210,13 @@ export default function GroupPage() {
             <span className="group-name">{group.name}</span>
             <span className="member-badge">{rankMembers.length}명</span>
           </div>
+          <button className="invite-btn" onClick={() => setShowInvite(true)} aria-label="친구 초대">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+            </svg>
+          </button>
         </header>
 
         {/* ── 탭 ── */}
@@ -206,7 +252,7 @@ export default function GroupPage() {
                   <div key={item.id} className={`feed-card ${item.isMe ? "feed-card--mine" : ""}`}>
                     {/* 카드 헤더 */}
                     <div className="feed-card-header">
-                      <div className="feed-avatar">{item.memberEmoji}</div>
+                      <div className="feed-avatar">{item.memberName.charAt(0)}</div>
                       <div className="feed-member-info">
                         <span className="feed-member-name">
                           {item.memberName}
@@ -260,7 +306,7 @@ export default function GroupPage() {
                 return (
                   <div className="rank1-card">
                     <div className="rank1-crown">👑</div>
-                    <div className="rank1-avatar">{top.emoji}</div>
+                    <div className="rank1-avatar">{top.name.charAt(0)}</div>
                     <div className="rank1-name">
                       {top.name}
                       {top.isMe && <span className="rank1-me-badge">나</span>}
@@ -278,9 +324,9 @@ export default function GroupPage() {
               {/* 2위~ 랭킹 목록 */}
               <div className="rank-list">
                 {rankMembers.slice(1).map((m, i) => (
-                  <div key={m.id} className="rank-item">
+                  <div key={m.userId} className="rank-item">
                     <span className="rank-no">{i + 2}</span>
-                    <span className="rank-emoji">{m.emoji}</span>
+                    <span className="rank-emoji">{m.name.charAt(0)}</span>
                     <div className="rank-info">
                       <span className="rank-name">
                         {m.name}
@@ -314,6 +360,47 @@ export default function GroupPage() {
         <div className="home-indicator">
           <div className="home-pill" />
         </div>
+
+        {/* ── 초대 코드 바텀 시트 ── */}
+        {showInvite && (
+          <>
+            <div className="modal-overlay" onClick={() => { setShowInvite(false); setCopied(false); }} />
+            <div className="modal-sheet">
+              <div className="modal-handle" />
+              <div className="modal-body">
+                <p className="modal-label">친구 초대하기</p>
+                <p className="invite-sub">아래 코드를 친구에게 공유하세요</p>
+                <div className="invite-code-box">
+                  <span className="invite-code-text">{group.inviteCode}</span>
+                </div>
+                <button
+                  className={`copy-btn ${copied ? "copy-btn--done" : ""}`}
+                  onClick={handleCopy}
+                >
+                  {copied ? (
+                    <>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
+                      복사됨!
+                    </>
+                  ) : (
+                    <>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2"/>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                      </svg>
+                      코드 복사하기
+                    </>
+                  )}
+                </button>
+              </div>
+              <div style={{ height: 16 }} />
+            </div>
+          </>
+        )}
 
       </div>
     </>
@@ -355,6 +442,7 @@ const css = `
     padding: 0 16px;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 10px;
     flex-shrink: 0;
     background: #FFFFFF;
@@ -393,6 +481,112 @@ const css = `
     background: #F1F1F5;
     padding: 2px 8px;
     border-radius: 100px;
+  }
+  .invite-btn {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #F1F1F5;
+    color: #111111;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .invite-btn:active { background: #E5E5EC; transform: scale(0.94); }
+
+  /* ── 모달 공통 ── */
+  .modal-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 40;
+    animation: fadeIn 0.2s ease;
+  }
+  .modal-sheet {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #FFFFFF;
+    border-radius: 24px 24px 0 0;
+    z-index: 50;
+    padding-bottom: max(34px, env(safe-area-inset-bottom));
+    animation: slideUp 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .modal-handle {
+    width: 40px;
+    height: 4px;
+    background: #E5E5EC;
+    border-radius: 100px;
+    margin: 14px auto 0;
+  }
+  .modal-body { padding: 24px 24px 0; }
+  .modal-label {
+    font-size: 18px;
+    font-weight: 800;
+    color: #111111;
+    letter-spacing: -0.04em;
+    margin-bottom: 4px;
+  }
+
+  /* ── 초대 코드 시트 ── */
+  .invite-sub {
+    font-size: 13px;
+    color: #767676;
+    letter-spacing: -0.01em;
+    margin-bottom: 20px;
+  }
+  .invite-code-box {
+    background: #F7F7F7;
+    border-radius: 20px;
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+  .invite-code-text {
+    font-size: 36px;
+    font-weight: 800;
+    color: #111111;
+    letter-spacing: 0.22em;
+    font-family: 'Pretendard', -apple-system, monospace, sans-serif;
+  }
+  .copy-btn {
+    width: 100%;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: #111111;
+    color: #FFFFFF;
+    font-family: 'Pretendard', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    border: none;
+    border-radius: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .copy-btn:active { transform: scale(0.97); background: #333333; }
+  .copy-btn--done { background: #22C55E; }
+  .copy-btn--done:active { background: #16A34A; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @keyframes slideUp {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
   }
 
   /* ── 탭 바 ── */
