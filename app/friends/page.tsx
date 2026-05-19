@@ -153,10 +153,22 @@ export default function FriendsPage() {
   }
 
   function handleCopy(code: string) {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    const markCopied = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
+    const execFallback = () => {
+      const el = document.createElement("textarea");
+      el.value = code;
+      el.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.appendChild(el);
+      el.focus(); el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      markCopied();
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(code).then(markCopied).catch(execFallback);
+    } else {
+      execFallback();
+    }
   }
 
   return (
