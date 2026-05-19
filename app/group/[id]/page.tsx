@@ -46,11 +46,16 @@ export default function GroupPage() {
         .from("group_members").select("*").eq("group_id", id).order("joined_at");
       setMembers(m ?? []);
 
+      await fetchRecords();
+      setLoading(false);
+    }
+
+    async function fetchRecords() {
       const { data: r } = await supabase
         .from("records").select("*").eq("group_id", id).order("created_at", { ascending: false });
       setRecords(r ?? []);
-      setLoading(false);
     }
+
     load();
 
     // 실시간 새 기록 구독
@@ -62,7 +67,17 @@ export default function GroupPage() {
       }, payload => setRecords(prev => [payload.new as Record, ...prev]))
       .subscribe();
 
-    return () => { supabase.removeChannel(sub); };
+    // 다른 탭/페이지에서 돌아왔을 때 재조회
+    const onFocus = () => fetchRecords();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") fetchRecords();
+    });
+
+    return () => {
+      supabase.removeChannel(sub);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [id]);
 
   const memberStats = members.map(m => ({
