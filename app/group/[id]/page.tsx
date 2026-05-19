@@ -7,9 +7,9 @@ import { supabase } from "@/lib/supabase";
 import { getProfile } from "../../onboarding/page";
 
 interface Member { id: string; nickname: string; joined_at: string; }
-interface Record {
+interface FeedRecord {
   id: string; nickname: string; amount: number;
-  situation: string | null; memo: string; created_at: string;
+  situation: string | null; memo: string | null; created_at: string;
 }
 interface Group { id: string; name: string; invite_code: string; created_at: string; }
 
@@ -26,10 +26,10 @@ function formatTime(iso: string): string {
 
 export default function GroupPage() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
+  const router  = useRouter();
   const [group,   setGroup]   = useState<Group | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
-  const [records, setRecords] = useState<Record[]>([]);
+  const [records, setRecords] = useState<FeedRecord[]>([]);
   const [tab,     setTab]     = useState<"feed" | "stats">("feed");
   const [loading, setLoading] = useState(true);
   const [copied,  setCopied]  = useState(false);
@@ -37,6 +37,15 @@ export default function GroupPage() {
   const myNickname = getProfile()?.nickname ?? "";
 
   useEffect(() => {
+    async function fetchRecords() {
+      const { data: r } = await supabase
+        .from("records")
+        .select("*")
+        .eq("group_id", id)
+        .order("created_at", { ascending: false });
+      if (r) setRecords(r);
+    }
+
     async function load() {
       const { data: g } = await supabase.from("groups").select("*").eq("id", id).single();
       if (!g) { router.replace("/friends"); return; }
@@ -50,12 +59,6 @@ export default function GroupPage() {
       setLoading(false);
     }
 
-    async function fetchRecords() {
-      const { data: r } = await supabase
-        .from("records").select("*").eq("group_id", id).order("created_at", { ascending: false });
-      setRecords(r ?? []);
-    }
-
     load();
 
     // 실시간 새 기록 구독
@@ -63,34 +66,52 @@ export default function GroupPage() {
       .channel(`group-${id}`)
       .on("postgres_changes", {
         event: "INSERT", schema: "public", table: "records",
-        filter: `group_id=eq.${id}`
-      }, payload => setRecords(prev => [payload.new as Record, ...prev]))
+        filter: `group_id=eq.${id}`,
+      }, payload => {
+        setRecords(prev => [payload.new as FeedRecord, ...prev]);
+      })
       .subscribe();
 
-    // 다른 탭/페이지에서 돌아왔을 때 재조회
-    const onFocus = () => fetchRecords();
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") fetchRecords();
-    });
+    // 페이지 복귀 시 재조회
+    const onVisible = () => { if (document.visibilityState === "visible") fetchRecords(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", fetchRecords);
 
     return () => {
       supabase.removeChannel(sub);
-      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", fetchRecords);
     };
   }, [id]);
 
-  const memberStats = members.map(m => ({
-    nickname: m.nickname,
-    total: records.filter(r => r.nickname === m.nickname).reduce((s, r) => s + r.amount, 0),
-  })).sort((a, b) => b.total - a.total);
+  // 통계: 멤버 전원 포함, 기록 없는 멤버는 0원
+  const memberStats = members
+    .map(m => ({
+      nickname: m.nickname,
+      total: records.filter(r => r.nickname === m.nickname).reduce((s, r) => s + r.amount, 0),
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  const topTotal = memberStats[0]?.total ?? 0;
 
   function copyCode() {
     if (!group) return;
-    navigator.clipboard.writeText(group.invite_code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    const markCopied = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
+    const fallback = () => {
+      const el = document.createElement("textarea");
+      el.value = group.invite_code;
+      el.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.appendChild(el);
+      el.focus(); el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      markCopied();
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(group.invite_code).then(markCopied).catch(fallback);
+    } else {
+      fallback();
+    }
   }
 
   if (loading) return (
@@ -111,6 +132,8 @@ export default function GroupPage() {
           <div className="status-icons">
             <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
               <rect x="0"  y="3" width="3" height="9"  rx="1" fill="#111" />
+              <rect x="4"  y="2" width="3" height="10" rx="1" fill="#111" />
+              <rect x="8"  y="1" width="3" height="11" rx="1" fill="#111" />
               <rect x="12" y="0" width="3" height="12" rx="1" fill="#111" />
             </svg>
             <svg width="25" height="12" viewBox="0 0 25 12" fill="none">
@@ -145,10 +168,10 @@ export default function GroupPage() {
           </button>
         </div>
 
-        {/* 콘텐츠 */}
-        <main className="content">
-          {tab === "feed" ? (
-            records.length === 0 ? (
+        {/* 피드 탭 */}
+        {tab === "feed" && (
+          <main className="content">
+            {records.length === 0 ? (
               <div className="empty-state">
                 <p className="empty-icon">🐷</p>
                 <p className="empty-title">아직 기록이 없어요</p>
@@ -157,56 +180,74 @@ export default function GroupPage() {
             ) : (
               <div className="feed-list">
                 {records.map(r => (
-                  <div key={r.id} className={`feed-item ${r.nickname === myNickname ? "feed-item--mine" : ""}`}>
-                    <div className="feed-avatar">{r.nickname.charAt(0)}</div>
-                    <div className="feed-body">
-                      <div className="feed-header-row">
-                        <span className="feed-nickname">
-                          {r.nickname}
-                          {r.nickname === myNickname && <span className="feed-me-badge">나</span>}
-                        </span>
-                        <span className="feed-time">{formatTime(r.created_at)}</span>
+                  <div key={r.id} className="feed-card">
+                    <div className="feed-card-top">
+                      <span className="feed-nickname">
+                        {r.nickname}
+                        {r.nickname === myNickname && <span className="feed-me-badge">나</span>}
+                      </span>
+                      <span className="feed-time">{formatTime(r.created_at)}</span>
+                    </div>
+                    <div className="feed-card-body">
+                      <div className="feed-card-left">
+                        {r.situation && (
+                          <span className="feed-tag">독하다독해</span>
+                        )}
+                        {(r.situation || r.memo) && (
+                          <p className="feed-situation">{r.situation ?? r.memo}</p>
+                        )}
+                        <p className="feed-amount">{r.amount.toLocaleString()}원</p>
                       </div>
-                      <div className="feed-amount">+{r.amount.toLocaleString()}원 참았어요!</div>
-                      {(r.situation || r.memo) && (
-                        <div className="feed-memo">{r.situation ?? r.memo}</div>
-                      )}
+                      <div className="feed-pig">🐷</div>
                     </div>
                   </div>
                 ))}
               </div>
-            )
-          ) : (
-            <div className="stats-list">
-              {memberStats.length === 0 ? (
-                <div className="empty-state">
-                  <p className="empty-icon">📊</p>
-                  <p className="empty-title">아직 기록이 없어요</p>
-                </div>
-              ) : (
-                memberStats.map((m, i) => (
-                  <div key={m.nickname} className="stats-item">
-                    <div className="stats-rank">{i === 0 ? "👑" : `${i + 1}`}</div>
-                    <div className="stats-info">
-                      <span className="stats-nickname">
-                        {m.nickname}
-                        {m.nickname === myNickname ? " (나)" : ""}
-                      </span>
-                      <div className="stats-bar-wrap">
-                        <div className="stats-bar" style={{
-                          width: memberStats[0].total > 0
-                            ? `${(m.total / memberStats[0].total) * 100}%` : "0%"
-                        }} />
+            )}
+            <div style={{ height: 32 }} />
+          </main>
+        )}
+
+        {/* 통계 탭 */}
+        {tab === "stats" && (
+          <main className="content">
+            {memberStats.length === 0 ? (
+              <div className="empty-state">
+                <p className="empty-icon">📊</p>
+                <p className="empty-title">아직 기록이 없어요</p>
+              </div>
+            ) : (
+              <div className="stats-list">
+                {memberStats.map((m, i) => {
+                  const isFirst = i === 0 && m.total > 0;
+                  const isZero  = m.total === 0;
+                  return (
+                    <div key={m.nickname} className={`stats-card ${isFirst ? "stats-card--first" : ""} ${isZero ? "stats-card--zero" : ""}`}>
+                      {isFirst && (
+                        <div className="stats-avatar">
+                          <span className="stats-avatar-letter">{m.nickname.charAt(0)}</span>
+                        </div>
+                      )}
+                      <div className="stats-info">
+                        <span className="stats-nickname">{m.nickname}{m.nickname === myNickname ? " (나)" : ""}</span>
+                        <span className={`stats-amount ${isFirst ? "stats-amount--first" : ""} ${isZero ? "stats-amount--zero" : ""}`}>
+                          {m.total.toLocaleString()}원
+                        </span>
                       </div>
+                      {isFirst && <span className="stats-crown">👑</span>}
+                      {!isFirst && !isZero && (
+                        <div className="stats-bar-wrap">
+                          <div className="stats-bar" style={{ width: topTotal > 0 ? `${(m.total / topTotal) * 100}%` : "0%" }} />
+                        </div>
+                      )}
                     </div>
-                    <span className="stats-amount">{m.total.toLocaleString()}원</span>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-          <div style={{ height: 32 }} />
-        </main>
+                  );
+                })}
+              </div>
+            )}
+            <div style={{ height: 32 }} />
+          </main>
+        )}
 
         {/* 하단 네비 */}
         <nav className="bottom-nav">
@@ -238,7 +279,7 @@ const css = `
   .shell {
     width: 100%; max-width: 402px; height: 100svh; margin: 0 auto;
     background: #fff; display: flex; flex-direction: column;
-    overflow: hidden; font-family: 'Pretendard', -apple-system, sans-serif; position: relative;
+    overflow: hidden; font-family: 'Pretendard', -apple-system, sans-serif;
   }
   .status-bar { height: 44px; padding: 14px 20px 0; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
   .status-time { font-size: 15px; font-weight: 700; color: #111; }
@@ -266,36 +307,63 @@ const css = `
   .tab--active { color: #111; border-bottom-color: #111; font-weight: 700; }
   .content { flex: 1; overflow-y: auto; scrollbar-width: none; }
   .content::-webkit-scrollbar { display: none; }
-  .feed-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
-  .feed-item { display: flex; gap: 12px; align-items: flex-start; }
-  .feed-item--mine .feed-avatar { background: linear-gradient(135deg, #FF2A7A, #FF7BAC); }
-  .feed-avatar {
-    width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
-    background: linear-gradient(135deg, #444, #888);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 15px; font-weight: 700; color: #fff;
+
+  /* ── 피드 ── */
+  .feed-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .feed-card {
+    background: #fff; border: 1px solid #F1F1F5; border-radius: 16px;
+    padding: 16px 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
   }
-  .feed-body { flex: 1; min-width: 0; }
-  .feed-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-  .feed-nickname { font-size: 13px; font-weight: 700; color: #111; display: flex; align-items: center; gap: 5px; }
+  .feed-card-top {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
+  }
+  .feed-nickname { font-size: 14px; font-weight: 700; color: #111; display: flex; align-items: center; gap: 6px; }
   .feed-me-badge {
     font-size: 10px; font-weight: 600; color: #FF2A7A;
     background: #FFE8F2; padding: 1px 6px; border-radius: 100px;
   }
-  .feed-time { font-size: 11px; color: #BBBBBB; }
-  .feed-amount { font-size: 15px; font-weight: 700; color: #FF2A7A; letter-spacing: -0.02em; }
-  .feed-memo {
-    margin-top: 4px; font-size: 12px; color: #767676;
-    background: #F7F7F7; padding: 6px 10px; border-radius: 8px; display: inline-block;
+  .feed-time { font-size: 12px; color: #BBBBBB; }
+  .feed-card-body { display: flex; align-items: flex-end; justify-content: space-between; }
+  .feed-card-left { display: flex; flex-direction: column; gap: 4px; }
+  .feed-tag {
+    display: inline-block; font-size: 11px; font-weight: 700; color: #FF2A7A;
+    background: #FFE8F2; padding: 3px 10px; border-radius: 100px; width: fit-content;
   }
-  .stats-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
-  .stats-item { display: flex; align-items: center; gap: 12px; }
-  .stats-rank { width: 28px; font-size: 16px; text-align: center; flex-shrink: 0; }
-  .stats-info { flex: 1; min-width: 0; }
-  .stats-nickname { font-size: 14px; font-weight: 600; color: #111; display: block; margin-bottom: 6px; }
-  .stats-bar-wrap { height: 6px; background: #F1F1F5; border-radius: 100px; overflow: hidden; }
-  .stats-bar { height: 100%; background: #FF2A7A; border-radius: 100px; transition: width 0.5s ease; min-width: 4px; }
-  .stats-amount { font-size: 14px; font-weight: 700; color: #111; white-space: nowrap; flex-shrink: 0; }
+  .feed-situation { font-size: 13px; color: #555; margin: 0; }
+  .feed-amount { font-size: 22px; font-weight: 800; color: #111; letter-spacing: -0.03em; margin: 0; }
+  .feed-pig { font-size: 40px; line-height: 1; }
+
+  /* ── 통계 ── */
+  .stats-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+  .stats-card {
+    background: #fff; border: 1px solid #F1F1F5; border-radius: 16px;
+    padding: 16px 18px; display: flex; align-items: center; gap: 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04); position: relative;
+  }
+  .stats-card--first {
+    background: #111; border-color: #111;
+  }
+  .stats-card--zero { background: #FAFAFA; border-color: #F1F1F5; box-shadow: none; }
+  .stats-avatar {
+    width: 48px; height: 48px; border-radius: 50%; background: #444;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .stats-avatar-letter { font-size: 20px; font-weight: 700; color: #fff; }
+  .stats-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .stats-nickname { font-size: 14px; font-weight: 600; color: #111; }
+  .stats-card--first .stats-nickname { color: #fff; }
+  .stats-card--zero .stats-nickname { color: #BBBBBB; }
+  .stats-amount { font-size: 20px; font-weight: 800; color: #111; letter-spacing: -0.03em; }
+  .stats-amount--first { color: #fff; font-size: 24px; }
+  .stats-amount--zero { color: #CCCCCC; font-size: 18px; }
+  .stats-crown { font-size: 22px; position: absolute; top: 12px; right: 16px; }
+  .stats-bar-wrap {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
+    background: #F1F1F5; border-radius: 0 0 16px 16px; overflow: hidden;
+  }
+  .stats-bar { height: 100%; background: #FF2A7A; border-radius: 0 0 16px 16px; transition: width 0.6s ease; }
+
+  /* ── 공통 ── */
   .empty-state { display: flex; flex-direction: column; align-items: center; padding: 60px 32px; gap: 10px; }
   .empty-icon { font-size: 48px; }
   .empty-title { font-size: 16px; font-weight: 700; color: #111; }
