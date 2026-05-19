@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabase";
 
 // ─── 스토리지 ─────────────────────────────────────────
 export interface UserProfile {
@@ -90,32 +91,54 @@ export default function OnboardingPage() {
   };
 
   // ── 설정 저장 ──────────────────────────────────────
-  const handleSetupSave = () => {
+  const handleSetupSave = async () => {
     if (pin.length < 4 || !nickname.trim()) return;
     setSubmitting(true);
-    setTimeout(() => {
-      const profile: UserProfile = {
-        userId: generateUserId(),
-        nickname: nickname.trim(),
-        pin,
-        createdAt: new Date().toISOString(),
-      };
-      localStorage.setItem(USER_KEY, JSON.stringify(profile));
-      sessionStorage.setItem(SESSION_KEY, "1");
-      router.replace("/");
-    }, 600);
+    const userId = generateUserId();
+    const profile: UserProfile = {
+      userId,
+      nickname: nickname.trim(),
+      pin,
+      createdAt: new Date().toISOString(),
+    };
+    // Supabase에 저장 (실패해도 로컬로 진행)
+    const { error: insertErr } = await supabase.from("profiles").insert({
+      user_id: userId,
+      nickname: profile.nickname,
+      pin: profile.pin,
+    });
+    if (insertErr) console.error(insertErr);
+    localStorage.setItem(USER_KEY, JSON.stringify(profile));
+    sessionStorage.setItem(SESSION_KEY, "1");
+    router.replace("/");
   };
 
   // ── 로그인 검증 ────────────────────────────────────
-  const handleLoginVerify = () => {
-    const profile = getProfile();
-    if (!profile) return;
-    if (profile.pin === pin) {
+  const handleLoginVerify = async () => {
+    const localProfile = getProfile();
+    // Supabase에서 닉네임+PIN으로 조회 (크로스 디바이스 지원)
+    const { data } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("nickname", profileName)
+      .eq("pin", pin)
+      .maybeSingle();
+
+    if (data) {
+      // Supabase에서 찾음 → 로컬 캐시 갱신
+      const profile: UserProfile = {
+        userId: data.user_id,
+        nickname: data.nickname,
+        pin: data.pin,
+        createdAt: data.created_at,
+      };
+      localStorage.setItem(USER_KEY, JSON.stringify(profile));
       setSubmitting(true);
-      setTimeout(() => {
-        sessionStorage.setItem(SESSION_KEY, "1");
-        router.replace("/");
-      }, 500);
+      setTimeout(() => { sessionStorage.setItem(SESSION_KEY, "1"); router.replace("/"); }, 500);
+    } else if (localProfile?.pin === pin) {
+      // 오프라인 폴백: 로컬 프로필로 검증
+      setSubmitting(true);
+      setTimeout(() => { sessionStorage.setItem(SESSION_KEY, "1"); router.replace("/"); }, 500);
     } else {
       setError(true);
       setShake(true);

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { getProfile } from "../onboarding/page";
+import { supabase } from "../../lib/supabase";
 
 // ─── 그룹 데이터 타입 ─────────────────────────────────
 export interface GroupMember {
@@ -76,6 +77,47 @@ export default function FriendsPage() {
   const inputRef  = useRef<HTMLInputElement>(null);
   const joinRef   = useRef<HTMLInputElement>(null);
 
+  // Supabase에서 내 그룹 목록 로드
+  const loadGroups = async () => {
+    const profile = getProfile();
+    if (!profile) return;
+    const { data: memberships } = await supabase
+      .from("group_members")
+      .select("group_id, joined_at, groups(id, name, invite_code, created_at)")
+      .eq("user_id", profile.userId);
+    if (!memberships) return;
+
+    // 각 그룹의 멤버 수 조회
+    const groupIds = memberships.map(m => m.group_id);
+    const { data: allMembers } = await supabase
+      .from("group_members")
+      .select("group_id, user_id, nickname, joined_at")
+      .in("group_id", groupIds.length ? groupIds : [""]);
+
+    const membersByGroup: Record<string, GroupMember[]> = {};
+    (allMembers ?? []).forEach(m => {
+      if (!membersByGroup[m.group_id]) membersByGroup[m.group_id] = [];
+      membersByGroup[m.group_id].push({ userId: m.user_id, nickname: m.nickname, joinedAt: m.joined_at });
+    });
+
+    const parsed: PiggyGroup[] = memberships
+      .map(m => {
+        const g = m.groups as unknown as { id: string; name: string; invite_code: string; created_at: string } | null;
+        if (!g) return null;
+        return {
+          id: g.id,
+          name: g.name,
+          createdAt: g.created_at,
+          inviteCode: g.invite_code,
+          memberCount: membersByGroup[g.id]?.length ?? 1,
+          members: membersByGroup[g.id] ?? [],
+        };
+      })
+      .filter(Boolean) as PiggyGroup[];
+
+    setGroups(parsed.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+  };
+
   useEffect(() => {
     // ?invite= 파라미터 처리 (초대 링크로 접속한 경우)
     const params = new URLSearchParams(window.location.search);
@@ -83,41 +125,21 @@ export default function FriendsPage() {
     if (inviteParam) {
       sessionStorage.removeItem("piggy-pending-invite");
       window.history.replaceState({}, "", "/friends");
-      try {
-        const groupData: PiggyGroup = JSON.parse(decodeURIComponent(atob(inviteParam)));
-        const profile = getProfile();
-        // 로그인 안 됐으면 onboarding 후 처리
-        if (!profile) {
-          sessionStorage.setItem("piggy-pending-invite", inviteParam);
-          window.location.href = "/onboarding";
-          return;
-        }
-        // 그룹이 없으면 localStorage에 추가
-        const existing = getGroups();
-        if (!existing.find(g => g.id === groupData.id)) {
-          localStorage.setItem(GROUPS_KEY, JSON.stringify([groupData, ...existing]));
-        }
-        // 현재 사용자를 멤버로 추가
-        const allGroups = getGroups();
-        const target = allGroups.find(g => g.id === groupData.id);
-        if (target) {
-          const alreadyMember = (target.members ?? []).some(m => m.userId === profile.userId);
-          if (!alreadyMember) {
-            const updated: PiggyGroup = {
-              ...target,
-              members: [...(target.members ?? []), { userId: profile.userId, nickname: profile.nickname, joinedAt: new Date().toISOString() }],
-              memberCount: (target.memberCount ?? 0) + 1,
-            };
-            localStorage.setItem(GROUPS_KEY, JSON.stringify(allGroups.map(g => g.id === target.id ? updated : g)));
-          }
-        }
-        window.location.href = `/group/${groupData.id}`;
-        return;
-      } catch {
-        // 잘못된 초대 링크 — 무시
-      }
+      void (async () => {
+        try {
+          const groupData = JSON.parse(decodeURIComponent(atob(inviteParam)));
+          const profile = getProfile();
+          if (!profile) { sessionStorage.setItem("piggy-pending-invite", inviteParam); window.location.href = "/onboarding"; return; }
+          // Supabase에서 그룹 찾거나 없으면 삽입
+          await supabase.from("groups").upsert({ id: groupData.id, name: groupData.name, invite_code: groupData.inviteCode, created_at: groupData.createdAt }, { onConflict: "id" });
+          await supabase.from("group_members").upsert({ group_id: groupData.id, user_id: profile.userId, nickname: profile.nickname }, { onConflict: "group_id,user_id" });
+          window.location.href = `/group/${groupData.id}`;
+        } catch { /* 잘못된 초대 링크 */ }
+      })();
+      return;
     }
-    setGroups(getGroups());
+    loadGroups();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 그룹 만들기 모달 포커스
@@ -133,53 +155,52 @@ export default function FriendsPage() {
   const openModal  = () => { setGroupName(""); setDone(false); setShowModal(true); };
   const closeModal = () => { setShowModal(false); setGroupName(""); setSaving(false); setDone(false); };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!groupName.trim() || saving) return;
     setSaving(true);
-    setTimeout(() => {
-      const profile = getProfile();
-      const creator: GroupMember = profile
-        ? { userId: profile.userId, nickname: profile.nickname, joinedAt: new Date().toISOString() }
-        : { userId: "unknown", nickname: "나", joinedAt: new Date().toISOString() };
-      const group: PiggyGroup = {
-        id: Date.now().toString(),
-        name: groupName.trim(),
-        createdAt: new Date().toISOString(),
-        inviteCode: generateInviteCode(),
-        memberCount: 1,
-        members: [creator],
-      };
-      saveGroup(group);
-      setGroups(getGroups());
-      setSaving(false);
-      setDone(true);
-      setTimeout(() => closeModal(), 900);
-    }, 600);
+    const profile = getProfile();
+    const group: PiggyGroup = {
+      id: Date.now().toString(),
+      name: groupName.trim(),
+      createdAt: new Date().toISOString(),
+      inviteCode: generateInviteCode(),
+      memberCount: 1,
+      members: profile ? [{ userId: profile.userId, nickname: profile.nickname, joinedAt: new Date().toISOString() }] : [],
+    };
+    // Supabase에 그룹 + 멤버 저장
+    const { error: ge } = await supabase.from("groups").insert({ id: group.id, name: group.name, invite_code: group.inviteCode, created_at: group.createdAt });
+    if (ge) console.error(ge);
+    if (profile) {
+      const { error: me } = await supabase.from("group_members").insert({ group_id: group.id, user_id: profile.userId, nickname: profile.nickname });
+      if (me) console.error(me);
+    }
+    await loadGroups();
+    setSaving(false);
+    setDone(true);
+    setTimeout(() => closeModal(), 900);
   };
 
-  const handleJoin = () => {
+  const handleJoin = async () => {
     const code = joinCode.trim().toUpperCase();
     if (code.length < 6) return;
-    const found = findGroupByCode(code);
+    // Supabase에서 초대 코드로 그룹 조회 (크로스 디바이스 지원)
+    const { data: found } = await supabase
+      .from("groups")
+      .select("*")
+      .eq("invite_code", code)
+      .maybeSingle();
     if (!found) {
       setJoinError(true);
       setTimeout(() => setJoinError(false), 2000);
       return;
     }
-    // 현재 사용자를 멤버에 추가 (중복 방지)
     const profile = getProfile();
     if (profile) {
-      const alreadyMember = (found.members ?? []).some(m => m.userId === profile.userId);
-      if (!alreadyMember) {
-        const newMember: GroupMember = { userId: profile.userId, nickname: profile.nickname, joinedAt: new Date().toISOString() };
-        const updatedGroup: PiggyGroup = {
-          ...found,
-          members: [...(found.members ?? []), newMember],
-          memberCount: (found.memberCount ?? 0) + 1,
-        };
-        const all = getGroups();
-        localStorage.setItem(GROUPS_KEY, JSON.stringify(all.map(g => g.id === found.id ? updatedGroup : g)));
-      }
+      const { error: je } = await supabase.from("group_members").upsert(
+        { group_id: found.id, user_id: profile.userId, nickname: profile.nickname },
+        { onConflict: "group_id,user_id" }
+      );
+      if (je) console.error(je);
     }
     setJoinDone(found.id);
     setTimeout(() => {

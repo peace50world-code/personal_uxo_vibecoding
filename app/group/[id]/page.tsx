@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getRecords, type PiggyRecord } from "../../page";
+import { type PiggyRecord } from "../../page";
 import { getProfile } from "../../onboarding/page";
+import { supabase } from "../../../lib/supabase";
 
 // ─── 타입 ────────────────────────────────────────────
 interface GroupMember {
@@ -79,65 +80,78 @@ export default function GroupPage() {
   const [copied,      setCopied]      = useState(false);
 
   useEffect(() => {
-    // 그룹 불러오기
-    let activeGroup: PiggyGroup;
-    try {
-      const groups: PiggyGroup[] = JSON.parse(localStorage.getItem("piggy-groups") ?? "[]");
-      const found = groups.find(g => g.id === id);
-      if (!found) { router.push("/friends"); return; }
-      // 초대 코드 없으면 생성 후 저장
-      if (!found.inviteCode) {
-        const updated = { ...found, inviteCode: generateCode() };
-        const updated_groups = groups.map(g => g.id === id ? updated : g);
-        localStorage.setItem("piggy-groups", JSON.stringify(updated_groups));
-        activeGroup = updated;
-      } else {
-        activeGroup = found;
-      }
+    let cleanup: (() => void) | undefined;
+
+    const load = async () => {
+      // Supabase에서 그룹 정보 로드
+      const { data: groupData } = await supabase
+        .from("groups").select("*").eq("id", id).maybeSingle();
+      if (!groupData) { router.push("/friends"); return; }
+
+      const activeGroup: PiggyGroup = {
+        id: groupData.id, name: groupData.name,
+        createdAt: groupData.created_at, inviteCode: groupData.invite_code,
+      };
       setGroup(activeGroup);
-    } catch { router.push("/friends"); return; }
 
-    // 현재 로그인 사용자
-    const profile = getProfile();
-    const myUserId = profile?.userId ?? "";
+      const profile = getProfile();
+      const myUserId = profile?.userId ?? "";
 
-    // 그룹 멤버 정보
-    const members: GroupMember[] = activeGroup.members ?? [];
-    const memberIds = members.map(m => m.userId);
-    const memberNames: Record<string, string> = {};
-    members.forEach(m => { memberNames[m.userId] = m.nickname; });
+      // 그룹 멤버 조회
+      const { data: memberRows } = await supabase
+        .from("group_members").select("user_id, nickname, joined_at").eq("group_id", id);
+      const members: GroupMember[] = (memberRows ?? []).map(m => ({ userId: m.user_id, nickname: m.nickname, joinedAt: m.joined_at }));
+      const memberIds = members.map(m => m.userId);
+      const memberNames: Record<string, string> = {};
+      members.forEach(m => { memberNames[m.userId] = m.nickname; });
 
-    // 전체 기록 → 그룹 멤버의 기록만 필터
-    const allRecords: PiggyRecord[] = getRecords();
-    const groupRecords = allRecords.filter(r => r.userId && memberIds.includes(r.userId));
+      // 멤버들의 기록 조회
+      const { data: recordRows } = await supabase
+        .from("records").select("*")
+        .in("user_id", memberIds.length ? memberIds : [""])
+        .order("created_at", { ascending: false });
+      const groupRecords: PiggyRecord[] = (recordRows ?? []).map(r => ({
+        id: r.id, userId: r.user_id, amount: r.amount,
+        situation: r.situation, memo: r.memo, createdAt: r.created_at,
+      }));
 
-    // 피드 아이템 생성 (최신순)
-    const feed: FeedItem[] = groupRecords.map(r => ({
-      id: r.id,
-      userId: r.userId!,
-      memberName: memberNames[r.userId!] ?? "멤버",
-      situation: r.situation !== null ? r.situation : (r.memo || "절약 기록"),
-      amount: r.amount,
-      createdAt: r.createdAt,
-      isMe: r.userId === myUserId,
-    })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    setFeedItems(feed);
+      setFeedItems(groupRecords.map(r => ({
+        id: r.id, userId: r.userId!,
+        memberName: memberNames[r.userId!] ?? "멤버",
+        situation: r.situation !== null ? r.situation : (r.memo || "절약 기록"),
+        amount: r.amount, createdAt: r.createdAt, isMe: r.userId === myUserId,
+      })));
 
-    // 랭킹 생성 (오늘 금액 기준)
-    const todayStr = new Date().toDateString();
-    const todayByUser: Record<string, number> = {};
-    groupRecords.forEach(r => {
-      if (new Date(r.createdAt).toDateString() === todayStr) {
-        todayByUser[r.userId!] = (todayByUser[r.userId!] ?? 0) + r.amount;
-      }
-    });
-    const rankList: RankMember[] = members.map(m => ({
-      userId: m.userId,
-      name: m.nickname,
-      todaySaved: todayByUser[m.userId] ?? 0,
-      isMe: m.userId === myUserId,
-    })).sort((a, b) => b.todaySaved - a.todaySaved);
-    setRankMembers(rankList);
+      const todayStr = new Date().toDateString();
+      const todayByUser: Record<string, number> = {};
+      groupRecords.forEach(r => {
+        if (new Date(r.createdAt).toDateString() === todayStr)
+          todayByUser[r.userId!] = (todayByUser[r.userId!] ?? 0) + r.amount;
+      });
+      setRankMembers(members.map(m => ({
+        userId: m.userId, name: m.nickname,
+        todaySaved: todayByUser[m.userId] ?? 0, isMe: m.userId === myUserId,
+      })).sort((a, b) => b.todaySaved - a.todaySaved));
+
+      // 실시간 구독
+      const channel = supabase.channel(`group-${id}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "records" },
+          payload => {
+            const r = payload.new as { id: string; user_id: string; amount: number; situation: string | null; memo: string; created_at: string };
+            if (!memberIds.includes(r.user_id)) return;
+            setFeedItems(prev => [{
+              id: r.id, userId: r.user_id,
+              memberName: memberNames[r.user_id] ?? "멤버",
+              situation: r.situation !== null ? r.situation : (r.memo || "절약 기록"),
+              amount: r.amount, createdAt: r.created_at, isMe: r.user_id === myUserId,
+            }, ...prev]);
+          })
+        .subscribe();
+      cleanup = () => { supabase.removeChannel(channel); };
+    };
+
+    void load();
+    return () => { cleanup?.(); };
   }, [id, router]);
 
   const handleCopy = () => {

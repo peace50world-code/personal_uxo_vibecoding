@@ -4,18 +4,30 @@ import { useState } from "react";
 import Link from "next/link";
 import { type PiggyRecord, STORAGE_KEY } from "../page";
 import { getProfile } from "../onboarding/page";
+import { supabase } from "../../lib/supabase";
 
 // ─── 상황 태그 ────────────────────────────────────────
 const SITUATIONS = ["차액 아끼기", "배달 참기", "커피 참기", "쇼핑 참기", "택시 참기", "간식 참기"];
 
-function addRecord(record: PiggyRecord) {
+async function addRecord(record: PiggyRecord) {
+  // localStorage (즉시 반영)
   try {
     const existing: PiggyRecord[] = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
     existing.unshift(record);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
   } catch (e) {
-    console.error("저장 실패:", e);
+    console.error("로컬 저장 실패:", e);
   }
+  // Supabase (영구 저장)
+  const { error } = await supabase.from("records").insert({
+    id: record.id,
+    user_id: record.userId,
+    amount: record.amount,
+    situation: record.situation,
+    memo: record.memo,
+    created_at: record.createdAt,
+  });
+  if (error) console.error(error);
 }
 
 type SaveState = "idle" | "saving" | "done";
@@ -42,9 +54,8 @@ export default function RecordPage() {
       memo: memo.trim(),
       createdAt: new Date().toISOString(),
     };
-    addRecord(record);
     setSaveState("saving");
-    setTimeout(() => setSaveState("done"), 900);
+    addRecord(record).then(() => setSaveState("done"));
   };
 
   const canSave = amount > 0 && saveState === "idle";

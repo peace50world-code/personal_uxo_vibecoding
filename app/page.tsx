@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getProfile, isLoggedIn } from "./onboarding/page";
+import { supabase } from "../lib/supabase";
 
 // ─── 공유 데이터 타입 ─────────────────────────────────
 export interface PiggyRecord {
@@ -156,12 +157,27 @@ export default function HomePage() {
     setNickname(profile.nickname);
     setReady(true);
 
-    const load = () => {
-      const all = getRecords();
-      // 내 기록만 필터 (userId 없는 기존 기록은 내 것으로 간주)
-      setRecords(profile.userId
-        ? all.filter(r => !r.userId || r.userId === profile.userId)
-        : all);
+    const load = async () => {
+      // Supabase에서 내 기록 로드
+      const { data } = await supabase
+        .from("records")
+        .select("*")
+        .eq("user_id", profile.userId)
+        .order("created_at", { ascending: false });
+      if (data && data.length > 0) {
+        setRecords(data.map(r => ({
+          id: r.id,
+          userId: r.user_id,
+          amount: r.amount,
+          situation: r.situation,
+          memo: r.memo,
+          createdAt: r.created_at,
+        })));
+      } else {
+        // 오프라인 폴백
+        const all = getRecords();
+        setRecords(all.filter(r => !r.userId || r.userId === profile.userId));
+      }
     };
     load();
     window.addEventListener("focus", load);
