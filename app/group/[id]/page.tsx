@@ -7,9 +7,9 @@ import { supabase } from "@/lib/supabase";
 import { getProfile } from "../../onboarding/page";
 
 interface Member { id: string; nickname: string; joined_at: string; }
-interface FeedRecord {
+interface Record {
   id: string; nickname: string; amount: number;
-  situation: string | null; memo: string | null; created_at: string;
+  situation: string | null; memo: string; created_at: string;
 }
 interface Group { id: string; name: string; invite_code: string; created_at: string; }
 
@@ -24,12 +24,83 @@ function formatTime(iso: string): string {
   return `${d.getMonth() + 1}월 ${d.getDate()}일`;
 }
 
+const PIG_REACTIONS = ["독하다독해", "절약왕!", "대단해!", "나도 참을게", "존경해 🫡", "파이팅! 💪"];
+
+function PigSketch({ reacted, onClick }: { reacted: boolean; onClick: () => void }) {
+  return (
+    <button className={`pig-btn ${reacted ? "pig-btn--reacted" : ""}`} onClick={onClick} aria-label="돼지 리액션">
+      <svg width="56" height="56" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+        {/* 귀 */}
+        <ellipse cx="14" cy="20" rx="7" ry="8" fill={reacted ? "#FFB6CC" : "#F5C8D4"} stroke={reacted ? "#E8809A" : "#D4A0B0"} strokeWidth="1.2"/>
+        <ellipse cx="42" cy="20" rx="7" ry="8" fill={reacted ? "#FFB6CC" : "#F5C8D4"} stroke={reacted ? "#E8809A" : "#D4A0B0"} strokeWidth="1.2"/>
+        <ellipse cx="14" cy="21" rx="3.5" ry="4.5" fill={reacted ? "#FF8FAF" : "#EBA8BB"} opacity="0.7"/>
+        <ellipse cx="42" cy="21" rx="3.5" ry="4.5" fill={reacted ? "#FF8FAF" : "#EBA8BB"} opacity="0.7"/>
+        {/* 얼굴 */}
+        <ellipse cx="28" cy="32" rx="19" ry="18" fill={reacted ? "#FFB6CC" : "#F5C8D4"} stroke={reacted ? "#E8809A" : "#D4A0B0"} strokeWidth="1.2"/>
+        {/* 볼터치 */}
+        <ellipse cx="18" cy="35" rx="5" ry="3.5" fill={reacted ? "#FF8FAF" : "#EBA8BB"} opacity="0.5"/>
+        <ellipse cx="38" cy="35" rx="5" ry="3.5" fill={reacted ? "#FF8FAF" : "#EBA8BB"} opacity="0.5"/>
+        {/* 코 */}
+        <ellipse cx="28" cy="36" rx="6" ry="4.5" fill={reacted ? "#FF8FAF" : "#EBA8BB"} opacity="0.8"/>
+        <circle cx="25.5" cy="36" r="1.5" fill={reacted ? "#CC4477" : "#AA6080"} opacity="0.6"/>
+        <circle cx="30.5" cy="36" r="1.5" fill={reacted ? "#CC4477" : "#AA6080"} opacity="0.6"/>
+        {/* 눈 */}
+        <ellipse cx="21" cy="28" rx="2.5" ry="2.8" fill="#111"/>
+        <ellipse cx="35" cy="28" rx="2.5" ry="2.8" fill="#111"/>
+        <circle cx="22" cy="27" r="0.9" fill="white"/>
+        <circle cx="36" cy="27" r="0.9" fill="white"/>
+        {/* 웃는 입 */}
+        {reacted
+          ? <path d="M22 41 Q28 47 34 41" stroke="#CC4477" strokeWidth="1.8" strokeLinecap="round" fill="none"/>
+          : <path d="M23 41 Q28 44 33 41" stroke="#AA6080" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+        }
+      </svg>
+    </button>
+  );
+}
+
+function FeedCard({ record: r, isMe }: { record: Record; isMe: boolean }) {
+  const [reacted, setReacted] = useState(false);
+  const [bubble, setBubble] = useState<string | null>(null);
+
+  function handleReact() {
+    if (reacted) { setReacted(false); setBubble(null); return; }
+    const msg = PIG_REACTIONS[Math.floor(Math.random() * PIG_REACTIONS.length)];
+    setReacted(true);
+    setBubble(msg);
+    setTimeout(() => setBubble(null), 2200);
+  }
+
+  return (
+    <div className="feed-card">
+      {/* 상단: 닉네임 + 시간 */}
+      <div className="feed-card-header">
+        <span className="feed-card-nickname">
+          {r.nickname}{isMe && <span className="feed-me-badge">나</span>}
+        </span>
+        <span className="feed-card-time">{formatTime(r.created_at)}</span>
+      </div>
+      {/* 내부 회색 카드 */}
+      <div className="feed-card-body">
+        <div className="feed-card-info">
+          <p className="feed-card-situation">{r.situation ?? r.memo ?? "절약 기록"}</p>
+          <p className="feed-card-amount">{r.amount.toLocaleString()}원</p>
+        </div>
+        <div className="feed-card-pig-wrap">
+          {bubble && <div className="pig-bubble" key={bubble + Date.now()}>{bubble}</div>}
+          <PigSketch reacted={reacted} onClick={handleReact} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function GroupPage() {
   const { id } = useParams<{ id: string }>();
-  const router  = useRouter();
+  const router = useRouter();
   const [group,   setGroup]   = useState<Group | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
-  const [records, setRecords] = useState<FeedRecord[]>([]);
+  const [records, setRecords] = useState<Record[]>([]);
   const [tab,     setTab]     = useState<"feed" | "stats">("feed");
   const [loading, setLoading] = useState(true);
   const [copied,  setCopied]  = useState(false);
@@ -37,99 +108,45 @@ export default function GroupPage() {
   const myNickname = getProfile()?.nickname ?? "";
 
   useEffect(() => {
-    async function fetchRecords() {
-      const { data: r } = await supabase
-        .from("records")
-        .select("*")
-        .eq("group_id", id)
-        .order("created_at", { ascending: false });
-      if (r) setRecords(r);
-    }
-
     async function load() {
-      const { data: g } = await supabase.from("groups").select("*").eq("id", id).single();
+      // 3개 쿼리 동시에 실행 (순차 → 병렬)
+      const [{ data: g }, { data: m }, { data: r }] = await Promise.all([
+        supabase.from("groups").select("*").eq("id", id).single(),
+        supabase.from("group_members").select("*").eq("group_id", id).order("joined_at"),
+        supabase.from("records").select("*").eq("group_id", id).order("created_at", { ascending: false }),
+      ]);
+
       if (!g) { router.replace("/friends"); return; }
       setGroup(g);
-
-      const { data: m } = await supabase
-        .from("group_members").select("*").eq("group_id", id).order("joined_at");
       setMembers(m ?? []);
-
-      await fetchRecords();
+      setRecords(r ?? []);
       setLoading(false);
     }
-
     load();
 
-    // 실시간 새 기록/멤버 변경 구독 — 이벤트 수신 시 전체 재조회 (피드 + 통계 동시 갱신)
+    // 실시간 새 기록 구독
     const sub = supabase
       .channel(`group-${id}`)
       .on("postgres_changes", {
-        event: "*", schema: "public", table: "records",
-        filter: `group_id=eq.${id}`,
-      }, () => {
-        fetchRecords();
-      })
-      .on("postgres_changes", {
-        event: "*", schema: "public", table: "group_members",
-        filter: `group_id=eq.${id}`,
-      }, async () => {
-        const { data: m } = await supabase
-          .from("group_members").select("*").eq("group_id", id).order("joined_at");
-        setMembers(m ?? []);
-      })
-      .subscribe(status => {
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          console.error("Realtime 구독 실패:", status);
-        }
-      });
+        event: "INSERT", schema: "public", table: "records",
+        filter: `group_id=eq.${id}`
+      }, payload => setRecords(prev => [payload.new as Record, ...prev]))
+      .subscribe();
 
-    // 폴링 폴백 — Realtime이 작동하지 않을 때 대비 (15초마다)
-    const pollId = setInterval(() => {
-      if (document.visibilityState === "visible") fetchRecords();
-    }, 15000);
-
-    // 페이지 복귀 시 재조회
-    const onVisible = () => { if (document.visibilityState === "visible") fetchRecords(); };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", fetchRecords);
-
-    return () => {
-      supabase.removeChannel(sub);
-      clearInterval(pollId);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", fetchRecords);
-    };
+    return () => { supabase.removeChannel(sub); };
   }, [id]);
 
-  // 통계: 멤버 전원 포함, 기록 없는 멤버는 0원
-  const memberStats = members
-    .map(m => ({
-      nickname: m.nickname,
-      total: records.filter(r => r.nickname === m.nickname).reduce((s, r) => s + r.amount, 0),
-    }))
-    .sort((a, b) => b.total - a.total);
-
-  const topTotal = memberStats[0]?.total ?? 0;
+  const memberStats = members.map(m => ({
+    nickname: m.nickname,
+    total: records.filter(r => r.nickname === m.nickname).reduce((s, r) => s + r.amount, 0),
+  })).sort((a, b) => b.total - a.total);
 
   function copyCode() {
     if (!group) return;
-    const markCopied = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
-    const fallback = () => {
-      const el = document.createElement("textarea");
-      el.value = group.invite_code;
-      el.style.cssText = "position:fixed;left:-9999px;top:0";
-      document.body.appendChild(el);
-      el.focus(); el.select();
-      document.execCommand("copy");
-      document.body.removeChild(el);
-      markCopied();
-    };
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(group.invite_code).then(markCopied).catch(fallback);
-    } else {
-      fallback();
-    }
+    navigator.clipboard.writeText(group.invite_code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }
 
   if (loading) return (
@@ -144,23 +161,8 @@ export default function GroupPage() {
       <style>{css}</style>
       <div className="shell">
 
-        {/* 상태바 */}
-        <div className="status-bar">
-          <span className="status-time">9:41</span>
-          <div className="status-icons">
-            <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
-              <rect x="0"  y="3" width="3" height="9"  rx="1" fill="#111" />
-              <rect x="4"  y="2" width="3" height="10" rx="1" fill="#111" />
-              <rect x="8"  y="1" width="3" height="11" rx="1" fill="#111" />
-              <rect x="12" y="0" width="3" height="12" rx="1" fill="#111" />
-            </svg>
-            <svg width="25" height="12" viewBox="0 0 25 12" fill="none">
-              <rect x="0" y="1" width="21" height="10" rx="3" stroke="#111" strokeWidth="1"/>
-              <rect x="1.5" y="2.5" width="15" height="7" rx="2" fill="#111"/>
-              <path d="M22.5 4v4a2 2 0 0 0 0-4z" fill="#111"/>
-            </svg>
-          </div>
-        </div>
+        {/* 상태바 여백 (UI 없이 여백만) */}
+        <div className="status-bar" />
 
         {/* 헤더 */}
         <header className="page-header">
@@ -171,9 +173,7 @@ export default function GroupPage() {
             </svg>
           </button>
           <h1 className="page-title">{group?.name}</h1>
-          <button className="share-btn" onClick={copyCode}>
-            {copied ? "복사됨 ✓" : `코드: ${group?.invite_code}`}
-          </button>
+          <div style={{ width: 36 }} />
         </header>
 
         {/* 탭 */}
@@ -186,10 +186,10 @@ export default function GroupPage() {
           </button>
         </div>
 
-        {/* 피드 탭 */}
-        {tab === "feed" && (
-          <main className="content">
-            {records.length === 0 ? (
+        {/* 콘텐츠 */}
+        <main className="content">
+          {tab === "feed" ? (
+            records.length === 0 ? (
               <div className="empty-state">
                 <p className="empty-icon">🐷</p>
                 <p className="empty-title">아직 기록이 없어요</p>
@@ -198,74 +198,41 @@ export default function GroupPage() {
             ) : (
               <div className="feed-list">
                 {records.map(r => (
-                  <div key={r.id} className="feed-card">
-                    <div className="feed-card-top">
-                      <span className="feed-nickname">
-                        {r.nickname}
-                        {r.nickname === myNickname && <span className="feed-me-badge">나</span>}
-                      </span>
-                      <span className="feed-time">{formatTime(r.created_at)}</span>
-                    </div>
-                    <div className="feed-card-body">
-                      <div className="feed-card-left">
-                        {r.situation && (
-                          <span className="feed-tag">독하다독해</span>
-                        )}
-                        {(r.situation || r.memo) && (
-                          <p className="feed-situation">{r.situation ?? r.memo}</p>
-                        )}
-                        <p className="feed-amount">{r.amount.toLocaleString()}원</p>
-                      </div>
-                      <div className="feed-pig">🐷</div>
-                    </div>
-                  </div>
+                  <FeedCard key={r.id} record={r} isMe={r.nickname === myNickname} />
                 ))}
               </div>
-            )}
-            <div style={{ height: 32 }} />
-          </main>
-        )}
-
-        {/* 통계 탭 */}
-        {tab === "stats" && (
-          <main className="content">
-            {memberStats.length === 0 ? (
-              <div className="empty-state">
-                <p className="empty-icon">📊</p>
-                <p className="empty-title">아직 기록이 없어요</p>
-              </div>
-            ) : (
-              <div className="stats-list">
-                {memberStats.map((m, i) => {
-                  const isFirst = i === 0 && m.total > 0;
-                  const isZero  = m.total === 0;
-                  return (
-                    <div key={m.nickname} className={`stats-card ${isFirst ? "stats-card--first" : ""} ${isZero ? "stats-card--zero" : ""}`}>
-                      {isFirst && (
-                        <div className="stats-avatar">
-                          <span className="stats-avatar-letter">{m.nickname.charAt(0)}</span>
-                        </div>
-                      )}
-                      <div className="stats-info">
-                        <span className="stats-nickname">{m.nickname}{m.nickname === myNickname ? " (나)" : ""}</span>
-                        <span className={`stats-amount ${isFirst ? "stats-amount--first" : ""} ${isZero ? "stats-amount--zero" : ""}`}>
-                          {m.total.toLocaleString()}원
-                        </span>
+            )
+          ) : (
+            <div className="stats-list">
+              {memberStats.length === 0 ? (
+                <div className="empty-state">
+                  <p className="empty-icon">📊</p>
+                  <p className="empty-title">아직 기록이 없어요</p>
+                </div>
+              ) : (
+                memberStats.map((m, i) => (
+                  <div key={m.nickname} className="stats-item">
+                    <div className="stats-rank">{i === 0 ? "👑" : `${i + 1}`}</div>
+                    <div className="stats-info">
+                      <span className="stats-nickname">
+                        {m.nickname}
+                        {m.nickname === myNickname ? " (나)" : ""}
+                      </span>
+                      <div className="stats-bar-wrap">
+                        <div className="stats-bar" style={{
+                          width: memberStats[0].total > 0
+                            ? `${(m.total / memberStats[0].total) * 100}%` : "0%"
+                        }} />
                       </div>
-                      {isFirst && <span className="stats-crown">👑</span>}
-                      {!isFirst && !isZero && (
-                        <div className="stats-bar-wrap">
-                          <div className="stats-bar" style={{ width: topTotal > 0 ? `${(m.total / topTotal) * 100}%` : "0%" }} />
-                        </div>
-                      )}
                     </div>
-                  );
-                })}
-              </div>
-            )}
-            <div style={{ height: 32 }} />
-          </main>
-        )}
+                    <span className="stats-amount">{m.total.toLocaleString()}원</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          <div style={{ height: 32 }} />
+        </main>
 
         {/* 하단 네비 */}
         <nav className="bottom-nav">
@@ -297,11 +264,9 @@ const css = `
   .shell {
     width: 100%; max-width: 402px; height: 100svh; margin: 0 auto;
     background: #fff; display: flex; flex-direction: column;
-    overflow: hidden; font-family: 'Pretendard', -apple-system, sans-serif;
+    overflow: hidden; font-family: 'Pretendard', -apple-system, sans-serif; position: relative;
   }
-  .status-bar { height: 44px; padding: 14px 20px 0; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
-  .status-time { font-size: 15px; font-weight: 700; color: #111; }
-  .status-icons { display: flex; align-items: center; gap: 6px; }
+  .status-bar { height: 44px; flex-shrink: 0; }
   .page-header {
     height: 56px; padding: 0 16px; display: flex; align-items: center;
     justify-content: space-between; flex-shrink: 0; border-bottom: 1px solid #F1F1F5; gap: 8px;
@@ -325,63 +290,101 @@ const css = `
   .tab--active { color: #111; border-bottom-color: #111; font-weight: 700; }
   .content { flex: 1; overflow-y: auto; scrollbar-width: none; }
   .content::-webkit-scrollbar { display: none; }
+  /* ── 피드 카드 ── */
+  .feed-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 20px; }
 
-  /* ── 피드 ── */
-  .feed-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  /* 외부: 닉네임+시간 + 내부카드 묶음 */
   .feed-card {
-    background: #fff; border: 1px solid #F1F1F5; border-radius: 16px;
-    padding: 16px 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    display: flex; flex-direction: column; gap: 12px;
+    background: #FFF; border: 0.7px solid #E5E5EC;
+    border-radius: 16px;
+    padding: 16.7px 16.7px 17px 16.7px;
   }
-  .feed-card-top {
-    display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
+  .feed-card-header {
+    display: flex; align-items: center; justify-content: space-between;
   }
-  .feed-nickname { font-size: 14px; font-weight: 700; color: #111; display: flex; align-items: center; gap: 6px; }
+  .feed-card-nickname {
+    font-size: 16px; font-weight: 600; color: #111;
+    display: flex; align-items: center; gap: 6px; letter-spacing: -0.025em;
+  }
   .feed-me-badge {
     font-size: 10px; font-weight: 600; color: #FF2A7A;
-    background: #FFE8F2; padding: 1px 6px; border-radius: 100px;
+    background: #FFE8F2; padding: 2px 7px; border-radius: 100px;
   }
-  .feed-time { font-size: 12px; color: #BBBBBB; }
-  .feed-card-body { display: flex; align-items: flex-end; justify-content: space-between; }
-  .feed-card-left { display: flex; flex-direction: column; gap: 4px; }
-  .feed-tag {
-    display: inline-block; font-size: 11px; font-weight: 700; color: #FF2A7A;
-    background: #FFE8F2; padding: 3px 10px; border-radius: 100px; width: fit-content;
-  }
-  .feed-situation { font-size: 13px; color: #555; margin: 0; }
-  .feed-amount { font-size: 22px; font-weight: 800; color: #111; letter-spacing: -0.03em; margin: 0; }
-  .feed-pig { font-size: 40px; line-height: 1; }
+  .feed-card-time { font-size: 13px; color: #999; font-weight: 500; letter-spacing: -0.02em; }
 
-  /* ── 통계 ── */
-  .stats-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
-  .stats-card {
-    background: #fff; border: 1px solid #F1F1F5; border-radius: 16px;
-    padding: 16px 18px; display: flex; align-items: center; gap: 14px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.04); position: relative;
+  /* 내부 회색 카드 */
+  .feed-card-body {
+    background: #FAFAFA;
+    border-radius: 12px;
+    padding: 14px;
+    display: flex; align-items: center; justify-content: space-between;
+    min-height: 90px; position: relative;
   }
-  .stats-card--first {
-    background: #111; border-color: #111;
+  .feed-card-info {
+    display: flex; flex-direction: column; gap: 6px;
   }
-  .stats-card--zero { background: #FAFAFA; border-color: #F1F1F5; box-shadow: none; }
-  .stats-avatar {
-    width: 48px; height: 48px; border-radius: 50%; background: #444;
-    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  .feed-card-situation {
+    font-size: 15px; font-weight: 600; color: #111; letter-spacing: -0.025em;
   }
-  .stats-avatar-letter { font-size: 20px; font-weight: 700; color: #fff; }
-  .stats-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .stats-nickname { font-size: 14px; font-weight: 600; color: #111; }
-  .stats-card--first .stats-nickname { color: #fff; }
-  .stats-card--zero .stats-nickname { color: #BBBBBB; }
-  .stats-amount { font-size: 20px; font-weight: 800; color: #111; letter-spacing: -0.03em; }
-  .stats-amount--first { color: #fff; font-size: 24px; }
-  .stats-amount--zero { color: #CCCCCC; font-size: 18px; }
-  .stats-crown { font-size: 22px; position: absolute; top: 12px; right: 16px; }
-  .stats-bar-wrap {
-    position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
-    background: #F1F1F5; border-radius: 0 0 16px 16px; overflow: hidden;
+  .feed-card-amount {
+    font-size: 24px; font-weight: 700; color: #565656; letter-spacing: -0.025em;
   }
-  .stats-bar { height: 100%; background: #FF2A7A; border-radius: 0 0 16px 16px; transition: width 0.6s ease; }
+  .feed-card-pig-wrap {
+    position: relative; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
 
-  /* ── 공통 ── */
+  /* ── 돼지 리액션 버튼 ── */
+  .pig-btn {
+    background: #F5F0EE; border: none; border-radius: 50%;
+    width: 67px; height: 64px; cursor: pointer; padding: 4px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 3px 4px rgba(0,0,0,0.05);
+    transition: transform 0.15s cubic-bezier(0.34,1.56,0.64,1);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .pig-btn:active { transform: scale(0.88); }
+  @keyframes pig-pop {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(1.2) rotate(-6deg); }
+    60%  { transform: scale(0.93) rotate(3deg); }
+    100% { transform: scale(1); }
+  }
+  .pig-btn--reacted { animation: pig-pop 0.38s cubic-bezier(0.34,1.56,0.64,1); }
+
+  /* ── 말풍선 (피그마: #FFDBDD, 아래 삼각형) ── */
+  @keyframes bubble-fade {
+    0%   { opacity: 0; transform: scale(0.8); }
+    15%  { opacity: 1; transform: scale(1.05); }
+    25%  { transform: scale(1); }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  .pig-bubble {
+    position: absolute; bottom: calc(100% + 4px); left: 50%;
+    transform: translateX(-50%);
+    background: #FFDBDD; color: #111;
+    font-size: 13px; font-weight: 400; white-space: nowrap;
+    padding: 4px 14px; border-radius: 100px;
+    animation: bubble-fade 2.2s ease forwards;
+    pointer-events: none; z-index: 10; letter-spacing: -0.01em;
+  }
+  .pig-bubble::after {
+    content: ""; position: absolute; top: 100%; left: 50%;
+    transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #FFDBDD;
+  }
+  .stats-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .stats-item { display: flex; align-items: center; gap: 12px; }
+  .stats-rank { width: 28px; font-size: 16px; text-align: center; flex-shrink: 0; }
+  .stats-info { flex: 1; min-width: 0; }
+  .stats-nickname { font-size: 14px; font-weight: 600; color: #111; display: block; margin-bottom: 6px; }
+  .stats-bar-wrap { height: 6px; background: #F1F1F5; border-radius: 100px; overflow: hidden; }
+  .stats-bar { height: 100%; background: #FF2A7A; border-radius: 100px; transition: width 0.5s ease; min-width: 4px; }
+  .stats-amount { font-size: 14px; font-weight: 700; color: #111; white-space: nowrap; flex-shrink: 0; }
   .empty-state { display: flex; flex-direction: column; align-items: center; padding: 60px 32px; gap: 10px; }
   .empty-icon { font-size: 48px; }
   .empty-title { font-size: 16px; font-weight: 700; color: #111; }

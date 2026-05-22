@@ -4,12 +4,10 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getProfile, isLoggedIn } from "./onboarding/page";
-import { supabase } from "../lib/supabase";
 
 // ─── 공유 데이터 타입 ─────────────────────────────────
 export interface PiggyRecord {
   id: string;
-  userId?: string;
   amount: number;
   situation: string | null;
   memo: string;
@@ -70,8 +68,29 @@ function getPiggyState(total: number) {
   return PIGGY_STATES.find((s) => total <= s.max) ?? PIGGY_STATES[3];
 }
 
-// ─── 돼지 SVG (상태별) ───────────────────────────────
+// ─── 돼지 SVG (상태별 + 인터랙션) ──────────────────────
+const PIGGY_MESSAGES: Record<string, string[]> = {
+  empty:  ["저도 채워지고 싶어요 🥺", "기록 한 번만요...", "첫 참기 화이팅!", "배고파요..."],
+  hungry: ["조금씩 채워지고 있어요 🌱", "잘 참고 있어요!", "파이팅!", "오늘도 최고야!"],
+  happy:  ["통통해졌어요 💕", "절약 최고야!", "오늘도 화이팅 ✨", "더 채워줘요!"],
+  rich:   ["황금 돼지 등장! 👑", "절약왕 만세 🎉", "부자 됐어요!", "이 맛이지~ 💰"],
+};
+
+interface Particle {
+  id: number;
+  dx: number;
+  dy: number;
+  emoji: string;
+  rotation: number;
+}
+
 function PiggyIllustration({ mood }: { mood: string }) {
+  const [squish, setSquish]     = useState(false);
+  const [shake, setShake]       = useState(false);
+  const [blinking, setBlinking] = useState(false);
+  const [bubble, setBubble]     = useState<string | null>(null);
+  const [particles, setParticles] = useState<Particle[]>([]);
+
   const fills = {
     empty:  { body: "#E5E5EC", cheek: "#D0D0D8", eye: "#999999", bg: "#F7F7F7" },
     hungry: { body: "#F5C8D4", cheek: "#EBA8BB", eye: "#111111", bg: "#FFF5F8" },
@@ -83,59 +102,144 @@ function PiggyIllustration({ mood }: { mood: string }) {
   const isHappy = mood === "happy" || mood === "rich";
   const isEmpty = mood === "empty";
 
+  // 자동 눈깜빡임
+  useEffect(() => {
+    let tid: ReturnType<typeof setTimeout>;
+    const scheduleBlink = () => {
+      tid = setTimeout(() => {
+        setBlinking(true);
+        setTimeout(() => { setBlinking(false); scheduleBlink(); }, 160);
+      }, 2200 + Math.random() * 3500);
+    };
+    scheduleBlink();
+    return () => clearTimeout(tid);
+  }, []);
+
+  const handleClick = () => {
+    const msgs = PIGGY_MESSAGES[mood] ?? PIGGY_MESSAGES.hungry;
+    setBubble(msgs[Math.floor(Math.random() * msgs.length)]);
+    setTimeout(() => setBubble(null), 1800);
+
+    if (isEmpty) {
+      setShake(true);
+      setTimeout(() => setShake(false), 550);
+      return;
+    }
+
+    setSquish(true);
+    setTimeout(() => setSquish(false), 380);
+
+    const emojis = isRich
+      ? ["💰", "⭐", "✨", "👑", "💎", "🌟"]
+      : mood === "happy"
+        ? ["💕", "✨", "🪙", "🌟", "💖", "🎀"]
+        : ["🌱", "🪙", "✨", "💪", "🌟", "💚"];
+
+    const next: Particle[] = Array.from({ length: 8 }, (_, i) => ({
+      id: Date.now() + i,
+      dx: (Math.random() - 0.5) * 160,
+      dy: -(Math.random() * 90 + 40),
+      emoji: emojis[Math.floor(Math.random() * emojis.length)],
+      rotation: (Math.random() - 0.5) * 360,
+    }));
+    setParticles(c => [...c, ...next]);
+    setTimeout(() => setParticles(c => c.filter(p => !next.some(n => n.id === p.id))), 900);
+  };
+
+  const eyeRy = blinking ? 0.8 : (isEmpty ? 4 : 5);
+  const eyeRx = isEmpty ? 4 : 5;
+
+  const wrapClass = [
+    "piggy-wrap",
+    squish  ? "piggy-squish" : "",
+    shake   ? "piggy-shake"  : "",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div
-      className="piggy-wrap"
-      style={{ background: fills.bg }}
-      aria-label="돼지저금통 캐릭터 (3D 에셋 삽입 예정)"
-    >
-      <svg width="140" height="140" viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg">
-        {isRich && (
-          <g>
-            <polygon points="42,42 52,28 62,38 72,24 82,38 92,28 100,42"
-              fill="#FFD700" stroke="#F0A800" strokeWidth="1.5" strokeLinejoin="round"/>
-            <rect x="40" y="40" width="62" height="8" rx="3" fill="#FFD700" stroke="#F0A800" strokeWidth="1"/>
-          </g>
-        )}
-        <ellipse cx="36" cy="58" rx="14" ry="16" fill={fills.body} />
-        <ellipse cx="36" cy="59" rx="8"  ry="10" fill={fills.cheek} opacity="0.6" />
-        <ellipse cx="106" cy="58" rx="14" ry="16" fill={fills.body} />
-        <ellipse cx="106" cy="59" rx="8"  ry="10" fill={fills.cheek} opacity="0.6" />
-        <ellipse cx="71" cy="90" rx="48" ry="44" fill={fills.body} />
-        <ellipse cx="55" cy="72" rx="12" ry="7" fill="white" opacity={isEmpty ? 0.2 : 0.35} />
-        <rect x="58" y="50" width="26" height="5" rx="2.5"
-          fill={isEmpty ? "#BBBBBB" : "#AA6080"} opacity={isEmpty ? 0.5 : 0.6} />
-        <circle cx="56" cy="80" r={isEmpty ? 4 : 5} fill={fills.eye} />
-        <circle cx="86" cy="80" r={isEmpty ? 4 : 5} fill={fills.eye} />
-        {!isEmpty && (
-          <>
-            <circle cx="58" cy="78" r="1.5" fill="white" />
-            <circle cx="88" cy="78" r="1.5" fill="white" />
-          </>
-        )}
-        <ellipse cx="71" cy="95" rx="14" ry="10" fill={fills.cheek} opacity="0.7" />
-        <circle cx="66" cy="95" r="3" fill={fills.body} opacity="0.6" />
-        <circle cx="76" cy="95" r="3" fill={fills.body} opacity="0.6" />
-        {isHappy ? (
-          <path d="M59 107 Q71 118 83 107" stroke={isRich ? "#CC8800" : "#CC4477"}
-            strokeWidth="2.5" strokeLinecap="round" fill="none" />
-        ) : (
-          <path d={isEmpty ? "M60 112 Q71 104 82 112" : "M61 108 Q71 108 81 108"}
-            stroke="#AAAAAA" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-        )}
-        <path d="M118 88 Q128 80 124 68 Q120 56 130 50"
-          stroke={fills.body} strokeWidth="6" strokeLinecap="round" fill="none" />
-        <ellipse cx="51" cy="130" rx="10" ry="6" fill={fills.cheek} opacity="0.8" />
-        <ellipse cx="91" cy="130" rx="10" ry="6" fill={fills.cheek} opacity="0.8" />
-        {isRich && (
-          <g fill="#FFD700" opacity="0.85">
-            <text x="20"  y="52" fontSize="14">✨</text>
-            <text x="108" y="50" fontSize="12">⭐</text>
-            <text x="14"  y="108" fontSize="10">💫</text>
-          </g>
-        )}
-      </svg>
-      <span className="piggy-badge">3D 에셋 삽입 예정</span>
+    <div className="piggy-outer" style={{ position: "relative" }}>
+      {/* 말풍선 */}
+      {bubble && (
+        <div className="piggy-bubble" key={bubble + Date.now()}>
+          {bubble}
+        </div>
+      )}
+
+      {/* 파티클 */}
+      {particles.map(p => (
+        <span
+          key={p.id}
+          className="piggy-particle"
+          style={{
+            "--dx": `${p.dx}px`,
+            "--dy": `${p.dy}px`,
+            "--rot": `${p.rotation}deg`,
+          } as React.CSSProperties}
+        >
+          {p.emoji}
+        </span>
+      ))}
+
+      <div
+        className={wrapClass}
+        style={{ background: fills.bg, cursor: "pointer" }}
+        aria-label="돼지저금통 캐릭터 — 탭해보세요!"
+        role="button"
+        tabIndex={0}
+        onClick={handleClick}
+        onKeyDown={e => e.key === "Enter" && handleClick()}
+      >
+        <svg width="140" height="140" viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+          {isRich && (
+            <g>
+              <polygon points="42,42 52,28 62,38 72,24 82,38 92,28 100,42"
+                fill="#FFD700" stroke="#F0A800" strokeWidth="1.5" strokeLinejoin="round"/>
+              <rect x="40" y="40" width="62" height="8" rx="3" fill="#FFD700" stroke="#F0A800" strokeWidth="1"/>
+            </g>
+          )}
+          <ellipse cx="36" cy="58" rx="14" ry="16" fill={fills.body} />
+          <ellipse cx="36" cy="59" rx="8"  ry="10" fill={fills.cheek} opacity="0.6" />
+          <ellipse cx="106" cy="58" rx="14" ry="16" fill={fills.body} />
+          <ellipse cx="106" cy="59" rx="8"  ry="10" fill={fills.cheek} opacity="0.6" />
+          <ellipse cx="71" cy="90" rx="48" ry="44" fill={fills.body} />
+          <ellipse cx="55" cy="72" rx="12" ry="7" fill="white" opacity={isEmpty ? 0.2 : 0.35} />
+          <rect x="58" y="50" width="26" height="5" rx="2.5"
+            fill={isEmpty ? "#BBBBBB" : "#AA6080"} opacity={isEmpty ? 0.5 : 0.6} />
+
+          {/* 눈 (깜빡임 지원 — ellipse로 변경) */}
+          <ellipse cx="56" cy="80" rx={eyeRx} ry={eyeRy} fill={fills.eye}
+            style={{ transition: "ry 0.06s ease" }} />
+          <ellipse cx="86" cy="80" rx={eyeRx} ry={eyeRy} fill={fills.eye}
+            style={{ transition: "ry 0.06s ease" }} />
+          {!isEmpty && !blinking && (
+            <>
+              <circle cx="58" cy="78" r="1.5" fill="white" />
+              <circle cx="88" cy="78" r="1.5" fill="white" />
+            </>
+          )}
+
+          <ellipse cx="71" cy="95" rx="14" ry="10" fill={fills.cheek} opacity="0.7" />
+          <circle cx="66" cy="95" r="3" fill={fills.body} opacity="0.6" />
+          <circle cx="76" cy="95" r="3" fill={fills.body} opacity="0.6" />
+          {isHappy ? (
+            <path d="M59 107 Q71 118 83 107" stroke={isRich ? "#CC8800" : "#CC4477"}
+              strokeWidth="2.5" strokeLinecap="round" fill="none" />
+          ) : (
+            <path d={isEmpty ? "M60 112 Q71 104 82 112" : "M61 108 Q71 108 81 108"}
+              stroke="#AAAAAA" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+          )}
+          <path d="M118 88 Q128 80 124 68 Q120 56 130 50"
+            stroke={fills.body} strokeWidth="6" strokeLinecap="round" fill="none" />
+          <ellipse cx="51" cy="130" rx="10" ry="6" fill={fills.cheek} opacity="0.8" />
+          <ellipse cx="91" cy="130" rx="10" ry="6" fill={fills.cheek} opacity="0.8" />
+          {isRich && (
+            <g fill="#FFD700" opacity="0.85">
+              <text x="20"  y="52" fontSize="14">✨</text>
+              <text x="108" y="50" fontSize="12">⭐</text>
+              <text x="14"  y="108" fontSize="10">💫</text>
+            </g>
+          )}
+        </svg>
+      </div>
     </div>
   );
 }
@@ -157,28 +261,7 @@ export default function HomePage() {
     setNickname(profile.nickname);
     setReady(true);
 
-    const load = async () => {
-      // Supabase에서 내 기록 로드
-      const { data } = await supabase
-        .from("records")
-        .select("*")
-        .eq("user_id", profile.userId)
-        .order("created_at", { ascending: false });
-      if (data && data.length > 0) {
-        setRecords(data.map(r => ({
-          id: r.id,
-          userId: r.user_id,
-          amount: r.amount,
-          situation: r.situation,
-          memo: r.memo,
-          createdAt: r.created_at,
-        })));
-      } else {
-        // 오프라인 폴백
-        const all = getRecords();
-        setRecords(all.filter(r => !r.userId || r.userId === profile.userId));
-      }
-    };
+    const load = () => setRecords(getRecords());
     load();
     window.addEventListener("focus", load);
     return () => window.removeEventListener("focus", load);
@@ -201,33 +284,12 @@ export default function HomePage() {
 
       <div className="shell">
 
-        {/* ── 상태바 (iOS 시뮬레이션) ── */}
-        <div className="status-bar">
-          <span className="status-time">9:41</span>
-          <div className="status-icons">
-            <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
-              <rect x="0"  y="3" width="3" height="9" rx="1" fill="#111" />
-              <rect x="4"  y="2" width="3" height="10" rx="1" fill="#111" />
-              <rect x="8"  y="1" width="3" height="11" rx="1" fill="#111" />
-              <rect x="12" y="0" width="3" height="12" rx="1" fill="#111" />
-            </svg>
-            <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
-              <path d="M8 2.5C10.8 2.5 13.3 3.7 15 5.7L16 4.5C14 2.2 11.2 0.8 8 0.8C4.8 0.8 2 2.2 0 4.5L1 5.7C2.7 3.7 5.2 2.5 8 2.5Z" fill="#111"/>
-              <path d="M8 5.5C9.9 5.5 11.6 6.3 12.8 7.6L14 6.4C12.4 4.8 10.3 3.8 8 3.8C5.7 3.8 3.6 4.8 2 6.4L3.2 7.6C4.4 6.3 6.1 5.5 8 5.5Z" fill="#111"/>
-              <circle cx="8" cy="11" r="1.5" fill="#111"/>
-            </svg>
-            <svg width="25" height="12" viewBox="0 0 25 12" fill="none">
-              <rect x="0" y="1" width="21" height="10" rx="3" stroke="#111" strokeWidth="1"/>
-              <rect x="1.5" y="2.5" width="15" height="7" rx="2" fill="#111"/>
-              <path d="M22.5 4v4a2 2 0 0 0 0-4z" fill="#111"/>
-            </svg>
-          </div>
-        </div>
+        {/* ── 상태바 여백 (UI 없이 여백만) ── */}
+        <div className="status-bar" />
 
         {/* ── GNB 헤더 ── */}
         <header className="gnb">
           <span className="gnb-logo">참으면돼지</span>
-          <span className="gnb-nickname">{nickname}님 👋</span>
           <div className="gnb-right">
             <button className="gnb-icon-btn" aria-label="알림">
               <span className="notif-dot" />
@@ -250,63 +312,59 @@ export default function HomePage() {
         {/* ── 스크롤 콘텐츠 ── */}
         <main className="content">
 
-          {/* 돼지 캐릭터 + 상태 메시지 */}
+          {/* 전체 누적 금액 + 돼지 */}
+          <section className="total-section">
+            <p className="total-label">전체 누적 금액</p>
+            <p className="total-amount">
+              {totalSaved === 0
+                ? <><span className="total-num">0</span><span className="total-unit">원</span></>
+                : <><span className="total-num">{totalSaved.toLocaleString()}</span><span className="total-unit">원</span></>
+              }
+            </p>
+            <p className="total-sub">{totalSaved === 0 ? "오늘 첫 참기에 도전해보세요!" : "오늘도 부자 한걸음"}</p>
+          </section>
+
+          {/* 돼지 */}
           <section className="piggy-section">
             <PiggyIllustration mood={piggy.mood} />
-            <p className="piggy-label">{piggy.label}</p>
-            <p className="piggy-sub">{piggy.sub}</p>
           </section>
 
           {/* 오늘 참은 금액 카드 */}
           <section className="today-card">
-            <p className="today-card-label">오늘 참은 금액</p>
-            <p className="today-card-amount">
-              {todaySaved === 0 ? (
-                <span className="amount-zero">0원</span>
-              ) : (
-                <><span className="amount-value">{todaySaved.toLocaleString()}</span><span className="amount-unit">원</span></>
-              )}
+            <p className="today-label">오늘 참은 금액</p>
+            <p className="today-amount">
+              <span className="today-num">
+                {todaySaved === 0 ? <span className="today-zero">0</span> : todaySaved.toLocaleString()}
+              </span>
+              <span className="today-unit">원</span>
             </p>
-            {todaySaved === 0 && (
-              <p className="today-card-hint">아직 기록이 없어요. 첫 참기에 도전해보세요!</p>
-            )}
-            {totalSaved > 0 && (
-              <p className="total-saved-hint">누적 절약 <strong>{totalSaved.toLocaleString()}원</strong></p>
-            )}
           </section>
 
           {/* 최근 기록 */}
           <section className="recent-section">
             <h2 className="recent-title">최근 기록</h2>
-
             {recentRecords.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-icon">🐽</div>
                 <p className="empty-text">아직 기록이 없어요</p>
-                <p className="empty-sub">
-                  아래 <strong>+</strong> 버튼을 눌러<br />
-                  첫 번째 참기를 기록해보세요
-                </p>
+                <p className="empty-sub">아래 + 버튼을 눌러 첫 번째 참기를 기록해보세요</p>
               </div>
             ) : (
               <div className="record-list">
                 {recentRecords.map(r => (
-                  <div key={r.id} className="record-item">
-                    <div className="record-info">
-                      <span className="record-label">
-                        {r.situation ?? (r.memo || "절약 기록")}
-                      </span>
+                  <div key={r.id} className="record-card">
+                    <p className="record-row">
+                      <span className="record-label">{r.situation ?? (r.memo || "절약 기록")}</span>
+                      <span className="record-dot"> · </span>
                       <span className="record-time">{formatTime(r.createdAt)}</span>
-                    </div>
-                    <span className="record-amount">+{r.amount.toLocaleString()}원</span>
+                    </p>
+                    <p className="record-amount">+{r.amount.toLocaleString()}원</p>
                   </div>
                 ))}
               </div>
             )}
           </section>
 
-          {/* 하단 여백 */}
-          <div style={{ height: 98 }} />
+          <div style={{ height: 110 }} />
         </main>
 
         {/* ── FAB ── */}
@@ -330,7 +388,7 @@ export default function HomePage() {
             <span>홈</span>
           </Link>
 
-          <Link href="/friends" className="nav-item" aria-label="친구">
+          <Link href="/friends" className="nav-item" aria-label="그룹">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="9" cy="7" r="4"/>
@@ -338,7 +396,7 @@ export default function HomePage() {
               <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
               <path d="M21 21v-2a4 4 0 0 0-3-3.85"/>
             </svg>
-            <span>친구</span>
+            <span>그룹</span>
           </Link>
         </nav>
 
@@ -368,26 +426,10 @@ const css = `
     position: relative;
   }
 
-  /* ── 상태바 (44px) ── */
+  /* ── 상태바 여백 (44px, UI 없음) ── */
   .status-bar {
     height: 44px;
-    padding: 14px 20px 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
     flex-shrink: 0;
-    background: #FFFFFF;
-  }
-  .status-time {
-    font-size: 15px;
-    font-weight: 700;
-    color: #111111;
-    letter-spacing: -0.02em;
-  }
-  .status-icons {
-    display: flex;
-    align-items: center;
-    gap: 6px;
   }
 
   /* ── GNB 헤더 (56px) ── */
@@ -456,13 +498,59 @@ const css = `
   }
   .content::-webkit-scrollbar { display: none; }
 
+  /* ── 전체 누적 금액 섹션 ── */
+  .total-section {
+    padding: 24px 20px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  .total-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: #767676;
+    letter-spacing: -0.01em;
+    margin-bottom: 10px;
+  }
+  .total-amount {
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+    margin-bottom: 8px;
+  }
+  .total-num {
+    font-size: 48px;
+    font-weight: 800;
+    color: #111111;
+    letter-spacing: -0.05em;
+    line-height: 1;
+  }
+  .total-unit {
+    font-size: 26px;
+    font-weight: 700;
+    color: #111111;
+    letter-spacing: -0.02em;
+  }
+  .total-sub {
+    font-size: 13px;
+    color: #AAAAAA;
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+
   /* ── 돼지 섹션 ── */
   .piggy-section {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 32px 24px 24px;
-    gap: 10px;
+    padding: 8px 24px 20px;
+  }
+  .piggy-outer {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .piggy-wrap {
     width: 180px;
@@ -474,19 +562,108 @@ const css = `
     position: relative;
     flex-shrink: 0;
     transition: background 0.5s ease;
+    animation: piggy-float 3s ease-in-out infinite;
+    user-select: none;
+    -webkit-user-select: none;
+    outline: none;
   }
-  .piggy-badge {
+  .piggy-wrap:focus-visible {
+    box-shadow: 0 0 0 3px rgba(255, 42, 122, 0.35);
+  }
+  .piggy-wrap:active {
+    transform: scale(0.93);
+  }
+
+  /* ── 돼지 인터랙션 애니메이션 ── */
+  @keyframes piggy-float {
+    0%, 100% { transform: translateY(0px); }
+    50%       { transform: translateY(-8px); }
+  }
+  @keyframes piggy-squish-anim {
+    0%   { transform: scale(1, 1); }
+    20%  { transform: scale(1.15, 0.82) translateY(6px); }
+    50%  { transform: scale(0.88, 1.18) translateY(-6px); }
+    70%  { transform: scale(1.06, 0.95); }
+    100% { transform: scale(1, 1); }
+  }
+  @keyframes piggy-shake-anim {
+    0%, 100% { transform: translateX(0); }
+    15%      { transform: translateX(-8px) rotate(-3deg); }
+    35%      { transform: translateX(7px) rotate(3deg); }
+    55%      { transform: translateX(-5px) rotate(-2deg); }
+    75%      { transform: translateX(4px) rotate(1deg); }
+  }
+  .piggy-squish {
+    animation: piggy-squish-anim 0.38s cubic-bezier(0.36, 0.07, 0.19, 0.97) both !important;
+  }
+  .piggy-shake {
+    animation: piggy-shake-anim 0.55s cubic-bezier(0.36, 0.07, 0.19, 0.97) both !important;
+  }
+
+  /* ── 말풍선 ── */
+  @keyframes bubble-pop {
+    0%   { opacity: 0; transform: translateX(-50%) scale(0.7) translateY(4px); }
+    15%  { opacity: 1; transform: translateX(-50%) scale(1.05) translateY(-2px); }
+    25%  { transform: translateX(-50%) scale(1) translateY(0); }
+    75%  { opacity: 1; transform: translateX(-50%) scale(1) translateY(0); }
+    100% { opacity: 0; transform: translateX(-50%) scale(0.9) translateY(-6px); }
+  }
+  .piggy-bubble {
     position: absolute;
-    bottom: -6px;
+    top: -52px;
     left: 50%;
     transform: translateX(-50%);
-    font-size: 9px;
-    color: #BBBBBB;
-    white-space: nowrap;
     background: #FFFFFF;
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: 1px solid #E5E5EC;
+    border: 1.5px solid #F1C0D0;
+    border-radius: 16px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #FF2A7A;
+    white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(255, 42, 122, 0.15);
+    animation: bubble-pop 1.8s ease forwards;
+    pointer-events: none;
+    z-index: 10;
+    letter-spacing: -0.01em;
+  }
+  .piggy-bubble::after {
+    content: "";
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-top: 8px solid #FFFFFF;
+    filter: drop-shadow(0 2px 1px rgba(255, 42, 122, 0.12));
+  }
+  .piggy-bubble::before {
+    content: "";
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 9px solid #F1C0D0;
+  }
+
+  /* ── 파티클 ── */
+  @keyframes particle-fly {
+    0%   { opacity: 1; transform: translate(0, 0) rotate(0deg) scale(1); }
+    60%  { opacity: 0.9; }
+    100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(0.4); }
+  }
+  .piggy-particle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    font-size: 18px;
+    line-height: 1;
+    pointer-events: none;
+    animation: particle-fly 0.85s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    z-index: 20;
   }
   .piggy-label {
     font-size: 16px;
@@ -506,104 +683,86 @@ const css = `
   /* ── 오늘 참은 금액 카드 ── */
   .today-card {
     margin: 0 20px 20px;
-    padding: 20px 22px;
-    background: #FFFFFF;
-    border: 1.5px solid #E5E5EC;
-    border-radius: 20px;
+    padding: 18px 20px;
+    background: #FAFAFA;
+    border-radius: 16px;
   }
-  .today-card-label {
+  .today-label {
     font-size: 13px;
     font-weight: 500;
     color: #767676;
     letter-spacing: -0.01em;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
-  .today-card-amount {
-    font-size: 36px;
+  .today-amount {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+  .today-num {
+    font-size: 32px;
     font-weight: 800;
     color: #111111;
-    letter-spacing: -0.05em;
+    letter-spacing: -0.04em;
     line-height: 1;
-    margin-bottom: 10px;
   }
-  .amount-zero { color: #D0D0D0; }
-  .amount-value { color: #111111; }
-  .amount-unit {
-    font-size: 22px;
-    font-weight: 700;
-    margin-left: 2px;
-    color: #111111;
-  }
-  .today-card-hint {
-    font-size: 12px;
-    color: #BBBBBB;
-    letter-spacing: -0.01em;
-    line-height: 1.5;
-  }
-  .total-saved-hint {
-    font-size: 12px;
+  .today-zero { color: #CCCCCC; }
+  .today-unit {
+    font-size: 16px;
+    font-weight: 600;
     color: #767676;
-    letter-spacing: -0.01em;
-    margin-top: 6px;
-  }
-  .total-saved-hint strong {
-    color: #FF2A7A;
-    font-weight: 700;
   }
 
   /* ── 최근 기록 ── */
   .recent-section {
-    padding: 4px 20px 0;
+    padding: 0 20px 0;
   }
   .recent-title {
     font-size: 16px;
     font-weight: 700;
     color: #111111;
     letter-spacing: -0.03em;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
   }
 
   /* ── 기록 목록 ── */
   .record-list {
     display: flex;
     flex-direction: column;
+    gap: 12px;
   }
-  .record-item {
+  .record-card {
+    background: #FFFFFF;
+    border: 0.7px solid #E5E5EC;
+    border-radius: 12px;
+    padding: 16px 17px;
+  }
+  .record-row {
+    font-size: 13px;
+    color: #767676;
+    margin-bottom: 4px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 14px 0;
-    border-bottom: 1px solid #F7F7F7;
-  }
-  .record-item:last-child { border-bottom: none; }
-  .record-info {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    flex: 1;
-    min-width: 0;
+    gap: 0;
   }
   .record-label {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: #111111;
-    letter-spacing: -0.01em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  }
+  .record-dot {
+    color: #BBBBBB;
+    font-size: 13px;
   }
   .record-time {
-    font-size: 12px;
-    color: #BBBBBB;
-    letter-spacing: -0.01em;
+    font-size: 13px;
+    color: #AAAAAA;
   }
   .record-amount {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 700;
-    color: #FF2A7A;
+    color: #111111;
     letter-spacing: -0.02em;
-    flex-shrink: 0;
-    margin-left: 12px;
   }
 
   /* ── 빈 상태 ── */
@@ -612,28 +771,20 @@ const css = `
     flex-direction: column;
     align-items: center;
     padding: 32px 16px 24px;
-    gap: 8px;
-  }
-  .empty-icon {
-    font-size: 36px;
-    margin-bottom: 4px;
+    gap: 6px;
   }
   .empty-text {
-    font-size: 15px;
-    font-weight: 700;
-    color: #111111;
+    font-size: 14px;
+    font-weight: 600;
+    color: #BBBBBB;
     letter-spacing: -0.02em;
   }
   .empty-sub {
-    font-size: 13px;
-    color: #767676;
+    font-size: 12px;
+    color: #CCCCCC;
     text-align: center;
-    line-height: 1.7;
+    line-height: 1.6;
     letter-spacing: -0.01em;
-  }
-  .empty-sub strong {
-    color: #FF2A7A;
-    font-weight: 700;
   }
 
   /* ── FAB ── */
