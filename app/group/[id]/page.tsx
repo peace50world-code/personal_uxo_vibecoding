@@ -284,7 +284,7 @@ export default function GroupPage() {
               <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
               <path d="M21 21v-2a4 4 0 0 0-3-3.85"/>
             </svg>
-            <span>친구</span>
+            <span>그룹</span>
           </Link>
         </nav>
         <div className="home-indicator"><div className="home-pill" /></div>

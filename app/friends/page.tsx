@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase, generateInviteCode } from "@/lib/supabase";
 import { getProfile } from "../onboarding/page";
 
@@ -15,6 +16,9 @@ interface PiggyGroup {
 
 type ModalMode = "create" | "join" | "invite";
 
+// 모듈 레벨 캐시 — 컴포넌트가 언마운트돼도 유지됨
+let _groupsCache: PiggyGroup[] | null = null;
+
 function formatDate(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -27,8 +31,8 @@ function formatDate(iso: string): string {
 }
 
 export default function FriendsPage() {
-  const [groups,      setGroups]      = useState<PiggyGroup[]>([]);
-  const [loading,     setLoading]     = useState(true);
+  const [groups,      setGroups]      = useState<PiggyGroup[]>(_groupsCache ?? []);
+  const [loading,     setLoading]     = useState(_groupsCache === null);
   const [modalMode,   setModalMode]   = useState<ModalMode | null>(null);
   const [groupName,   setGroupName]   = useState("");
   const [joinCode,    setJoinCode]    = useState("");
@@ -38,43 +42,49 @@ export default function FriendsPage() {
   const [inviteGroup, setInviteGroup] = useState<PiggyGroup | null>(null);
   const [copied,      setCopied]      = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
   const nickname = getProfile()?.nickname ?? "익명";
 
   async function loadGroups() {
-    setLoading(true);
-    // 내가 참가한 그룹 목록
-    const { data: memberRows } = await supabase
+    // 캐시가 없을 때만 로딩 스피너 표시
+    if (_groupsCache === null) setLoading(true);
+
+    // 쿼리 1: 내가 속한 그룹 정보를 한 번에 join해서 가져오기
+    const { data: myMemberships } = await supabase
       .from("group_members")
-      .select("group_id")
+      .select("group_id, groups(*)")
       .eq("nickname", nickname);
 
-    if (!memberRows || memberRows.length === 0) {
+    if (!myMemberships || myMemberships.length === 0) {
+      _groupsCache = [];
       setGroups([]);
       setLoading(false);
       return;
     }
 
-    const groupIds = memberRows.map(r => r.group_id);
-    const { data: groupRows } = await supabase
-      .from("groups")
-      .select("*")
-      .in("id", groupIds)
-      .order("created_at", { ascending: false });
+    const groupIds = myMemberships.map(r => r.group_id);
 
-    if (!groupRows) { setGroups([]); setLoading(false); return; }
+    // 쿼리 2: 전체 멤버 목록을 한 번에 가져와서 로컬에서 카운트
+    const { data: allMembers } = await supabase
+      .from("group_members")
+      .select("group_id")
+      .in("group_id", groupIds);
 
-    // 각 그룹 멤버 수
-    const withCounts = await Promise.all(
-      groupRows.map(async g => {
-        const { count } = await supabase
-          .from("group_members")
-          .select("*", { count: "exact", head: true })
-          .eq("group_id", g.id);
-        return { ...g, member_count: count ?? 1 };
-      })
-    );
-    setGroups(withCounts);
+    const countMap: Record<string, number> = {};
+    (allMembers ?? []).forEach(m => {
+      countMap[m.group_id] = (countMap[m.group_id] ?? 0) + 1;
+    });
+
+    const groups = myMemberships
+      .map(r => ({
+        ...(r.groups as any),
+        member_count: countMap[r.group_id] ?? 1,
+      }))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    _groupsCache = groups;
+    setGroups(groups);
     setLoading(false);
   }
 
@@ -176,23 +186,8 @@ export default function FriendsPage() {
       <style>{css}</style>
       <div className="shell">
 
-        {/* 상태바 */}
-        <div className="status-bar">
-          <span className="status-time">9:41</span>
-          <div className="status-icons">
-            <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
-              <rect x="0"  y="3" width="3" height="9"  rx="1" fill="#111" />
-              <rect x="4"  y="2" width="3" height="10" rx="1" fill="#111" />
-              <rect x="8"  y="1" width="3" height="11" rx="1" fill="#111" />
-              <rect x="12" y="0" width="3" height="12" rx="1" fill="#111" />
-            </svg>
-            <svg width="25" height="12" viewBox="0 0 25 12" fill="none">
-              <rect x="0" y="1" width="21" height="10" rx="3" stroke="#111" strokeWidth="1"/>
-              <rect x="1.5" y="2.5" width="15" height="7" rx="2" fill="#111"/>
-              <path d="M22.5 4v4a2 2 0 0 0 0-4z" fill="#111"/>
-            </svg>
-          </div>
-        </div>
+        {/* 상태바 여백 (UI 없이 여백만) */}
+        <div className="status-bar" />
 
         {/* 헤더 */}
         <header className="page-header">
@@ -232,7 +227,7 @@ export default function FriendsPage() {
             <div className="group-list">
               {groups.map(g => (
                 <div key={g.id} className="group-card-wrap">
-                  <button className="group-card" onClick={() => window.location.href = `/group/${g.id}`}>
+                  <button className="group-card" onClick={() => router.push(`/group/${g.id}`)}>
                     <div className="group-card-left">
                       <div className="group-avatar">{g.name.charAt(0)}</div>
                       <div className="group-info">
@@ -275,7 +270,7 @@ export default function FriendsPage() {
               <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
               <path d="M21 21v-2a4 4 0 0 0-3-3.85"/>
             </svg>
-            <span>친구</span>
+            <span>그룹</span>
           </Link>
         </nav>
 
@@ -418,12 +413,7 @@ const css = `
     overflow: hidden; font-family: 'Pretendard', -apple-system, sans-serif;
     position: relative; -webkit-tap-highlight-color: transparent;
   }
-  .status-bar {
-    height: 44px; padding: 14px 20px 0; display: flex;
-    align-items: center; justify-content: space-between; flex-shrink: 0;
-  }
-  .status-time { font-size: 15px; font-weight: 700; color: #111; letter-spacing: -0.02em; }
-  .status-icons { display: flex; align-items: center; gap: 6px; }
+  .status-bar { height: 44px; flex-shrink: 0; }
   .page-header {
     height: 60px; padding: 0 20px; display: flex; align-items: center;
     justify-content: space-between; flex-shrink: 0;
