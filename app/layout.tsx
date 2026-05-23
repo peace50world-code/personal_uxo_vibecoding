@@ -4,6 +4,7 @@ import "./globals.css";
 const APP_URL = "https://personal-uxo-vibecoding-k4sv.vercel.app";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(APP_URL),
   title: "참아낸다이어",
   description: "참은 소비를 기록하고 친구들과 공유하는 절약 챌린지",
   openGraph: {
