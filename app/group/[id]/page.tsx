@@ -166,7 +166,14 @@ export default function GroupPage() {
 
         {/* 헤더 */}
         <header className="page-header">
-          <button className="back-btn" onClick={() => router.back()}>
+          <button className="back-btn" onClick={() => {
+            // 히스토리가 있으면 뒤로가기, 없으면 (초대링크 진입 등) 그룹 목록으로
+            if (typeof window !== "undefined" && window.history.length > 1) {
+              router.back();
+            } else {
+              router.push("/friends");
+            }
+          }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
               <polyline points="15 18 9 12 15 6"/>
