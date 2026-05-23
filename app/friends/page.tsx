@@ -162,11 +162,20 @@ export default function FriendsPage() {
     setTimeout(() => closeModal(), 1200);
   }
 
-  function handleCopy(code: string) {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+  const APP_URL = "https://personal-uxo-vibecoding-k4sv.vercel.app";
+
+  function handleShare(group: PiggyGroup) {
+    const url  = `${APP_URL}/join/${group.invite_code}`;
+    const text = `🐷 참아낸다이어 절약 챌린지!\n'${nickname}'님이 '${group.name}'에 초대합니다\n\n파티 코드 : ${group.invite_code}\n${url}`;
+
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ title: `${group.name} 그룹 초대`, text }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    }
   }
 
   return (
@@ -231,7 +240,7 @@ export default function FriendsPage() {
                       <polyline points="9 18 15 12 9 6"/>
                     </svg>
                   </button>
-                  <button className="invite-btn" onClick={() => { setInviteGroup(g); setModalMode("invite"); }}>
+                  <button className="invite-btn" onClick={() => handleShare(g)}>
                     초대 코드 공유
                   </button>
                 </div>
@@ -371,19 +380,20 @@ export default function FriendsPage() {
               <div className="modal-handle" />
               <div className="modal-body">
                 <p className="modal-label">친구 초대하기</p>
-                <p className="modal-sublabel">아래 코드를 친구에게 공유하세요</p>
+                <p className="modal-sublabel">링크를 공유하면 코드 입력 없이 바로 참가해요</p>
                 <div className="invite-code-box">
-                  <span className="invite-code-text">{inviteGroup.invite_code}</span>
-                  <button className="invite-copy-btn" onClick={() => handleCopy(inviteGroup.invite_code)}>
-                    {copied ? "복사됨 ✓" : "복사"}
-                  </button>
+                  <div>
+                    <p className="invite-group-label">{inviteGroup.name}</p>
+                    <p className="invite-link-text">{`/join/${inviteGroup.invite_code}`}</p>
+                  </div>
+                  <span className="invite-code-badge">{inviteGroup.invite_code}</span>
                 </div>
-                <p className="invite-hint">
-                  친구가 그룹 탭에서 <strong>"코드 참가"</strong>를 누르고<br />이 코드를 입력하면 참가할 수 있어요!
-                </p>
               </div>
               <div className="modal-footer">
-                <button className="modal-btn-save" onClick={closeModal}>확인</button>
+                <button className="modal-btn-save" onClick={() => { handleShare(inviteGroup); }}>
+                  {copied ? "복사됨 ✓" : "🔗 공유하기"}
+                </button>
+                <button className="modal-btn-cancel" onClick={closeModal}>닫기</button>
               </div>
             </div>
           </>
@@ -556,23 +566,21 @@ const css = `
   .invite-code-box {
     display: flex; align-items: center; justify-content: space-between;
     background: #F7F7F7; border: 1.5px solid #E5E5EC; border-radius: 16px;
-    padding: 16px 20px; margin-bottom: 16px;
+    padding: 16px 20px; margin-bottom: 4px; gap: 12px;
   }
-  .invite-code-text {
-    font-size: 28px; font-weight: 800; color: #111;
-    letter-spacing: 0.18em; font-variant-numeric: tabular-nums;
+  .invite-group-label { font-size: 15px; font-weight: 700; color: #111; margin-bottom: 4px; }
+  .invite-link-text { font-size: 12px; color: #BBBBBB; }
+  .invite-code-badge {
+    font-size: 15px; font-weight: 800; color: #FF2A7A;
+    background: #FFE8F2; padding: 6px 12px; border-radius: 100px;
+    letter-spacing: 0.1em; white-space: nowrap; flex-shrink: 0;
   }
-  .invite-copy-btn {
-    height: 36px; padding: 0 16px; background: #FF2A7A; color: #fff;
-    font-family: 'Pretendard', sans-serif; font-size: 14px; font-weight: 700;
-    border: none; border-radius: 100px; cursor: pointer; transition: all 0.15s;
-    white-space: nowrap;
+  .modal-btn-cancel {
+    width: 100%; height: 44px; display: flex; align-items: center; justify-content: center;
+    background: none; color: #BBBBBB;
+    font-family: 'Pretendard', sans-serif; font-size: 14px; font-weight: 600;
+    border: none; cursor: pointer; margin-top: 4px;
   }
-  .invite-copy-btn:active { transform: scale(0.96); }
-  .invite-hint {
-    font-size: 13px; color: #767676; line-height: 1.7; text-align: center;
-  }
-  .invite-hint strong { color: #111; font-weight: 700; }
   .spinner {
     width: 22px; height: 22px; border-radius: 50%;
     border: 2.5px solid rgba(255,255,255,0.35); border-top-color: #fff;
