@@ -346,8 +346,6 @@ export default function HomePage() {
 
       <div className="shell">
 
-        {/* ── 상태바 여백 (UI 없이 여백만) ── */}
-        <div className="status-bar" />
 
         {/* ── GNB 헤더 ── */}
         <header className="gnb">
@@ -466,10 +464,6 @@ export default function HomePage() {
           </Link>
         </nav>
 
-        {/* ── 홈 인디케이터 ── */}
-        <div className="home-indicator">
-          <div className="home-pill" />
-        </div>
 
       </div>
     </>
