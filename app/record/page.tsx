@@ -132,12 +132,25 @@ export default function RecordPage() {
           {/* 참은 금액 입력 */}
           <section className="amount-section">
             <p className="amount-label">참은 금액</p>
-            <div className="amount-display">
-              <span className={`amount-number ${amount > 0 ? "amount-number--active" : ""}`}>
-                {amount.toLocaleString()}
-              </span>
+            <label className="amount-display">
+              <input
+                className={`amount-input ${amount > 0 ? "amount-input--active" : ""}`}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                placeholder="0"
+                value={amount > 0 ? amount.toLocaleString() : ""}
+                onChange={e => {
+                  const raw = e.target.value.replace(/[^\d]/g, "");
+                  if (raw === "") { setAmount(0); return; }
+                  // 최대 12자리(천만원 단위 안전 범위)
+                  const num = parseInt(raw.slice(0, 12), 10);
+                  setAmount(Number.isNaN(num) ? 0 : num);
+                }}
+                aria-label="참은 금액 입력"
+              />
               <span className="amount-unit">원</span>
-            </div>
+            </label>
           </section>
 
           {/* 빠른 버튼 행 1: +1,000 / +5,000 / +10,000 */}
@@ -298,22 +311,36 @@ const css = `
     border-radius: 20px;
     min-height: 78px;
     border: 2px solid transparent;
-    transition: border-color 0.2s;
+    transition: all 0.2s;
+    cursor: text;
   }
-  .amount-display:has(.amount-number--active) {
+  .amount-display:has(.amount-input--active),
+  .amount-display:focus-within {
     border-color: #FF2A7A;
     background: #FFF8FB;
   }
-  .amount-number {
+  .amount-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0;
+    font-family: 'Pretendard', sans-serif;
     font-size: 40px;
     font-weight: 800;
     color: #D0D0D8;
     letter-spacing: -0.04em;
     line-height: 1;
     transition: color 0.2s;
+    -webkit-tap-highlight-color: transparent;
   }
-  .amount-number--active {
-    color: #111111;
+  .amount-input::placeholder { color: #D0D0D8; }
+  .amount-input--active { color: #111111; }
+  .amount-input:focus { color: #111111; }
+  .amount-input::-webkit-outer-spin-button,
+  .amount-input::-webkit-inner-spin-button {
+    -webkit-appearance: none; margin: 0;
   }
   .amount-unit {
     font-size: 22px;
