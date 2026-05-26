@@ -383,7 +383,11 @@ export default function HomePage() {
                 : <><span className="total-num">{totalSaved.toLocaleString()}</span><span className="total-unit">원</span></>
               }
             </p>
-            <p className="total-sub">{totalSaved === 0 ? "오늘 첫 참기에 도전해보세요!" : "오늘도 부자 한걸음"}</p>
+            <p className="total-sub">
+              {totalSaved === 0
+                ? "사소하게 아낀 돈, 모으면 얼마가 될까요?\n참은 소비를 기록하고 저금통을 채워보세요!"
+                : "오늘도 부자 한걸음"}
+            </p>
           </section>
 
           {/* 돼지 */}
@@ -599,6 +603,9 @@ const css = `
     color: #AAAAAA;
     letter-spacing: -0.01em;
     margin-bottom: 4px;
+    white-space: pre-line;
+    line-height: 1.55;
+    text-align: center;
   }
 
   /* ── 돼지 섹션 ── */
