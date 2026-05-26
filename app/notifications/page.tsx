@@ -29,7 +29,18 @@ interface NotifMember {
   nickname: string;
 }
 
-type Notification = NotifRecord | NotifMember;
+interface NotifReaction {
+  kind: "reaction";
+  id: string;
+  ts: string;
+  groupId: string;
+  groupName: string;
+  nickname: string;       // 리액션 누른 사람
+  recordSituation: string;
+  recordAmount: number;
+}
+
+type Notification = NotifRecord | NotifMember | NotifReaction;
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -81,8 +92,8 @@ export default function NotificationsPage() {
         myJoinedAt[m.group_id] = m.joined_at;
       });
 
-      // 2) 친구들의 절약 기록 (내 것 제외) + 그룹 멤버 가입 (내 것 제외) 병렬 fetch
-      const [{ data: records }, { data: members }] = await Promise.all([
+      // 2) 친구들의 절약 기록 / 그룹 멤버 가입 / 내 기록 (리액션 알림용) 병렬 fetch
+      const [{ data: records }, { data: members }, { data: myRecords }] = await Promise.all([
         supabase.from("records")
           .select("id, group_id, nickname, amount, situation, memo, created_at")
           .in("group_id", groupIds)
@@ -95,7 +106,41 @@ export default function NotificationsPage() {
           .neq("nickname", myNickname)
           .order("joined_at", { ascending: false })
           .limit(100),
+        supabase.from("records")
+          .select("id, group_id, situation, memo, amount")
+          .in("group_id", groupIds)
+          .eq("nickname", myNickname),
       ]);
+
+      // 내 기록에 달린 리액션 (남이 누른 것만)
+      let reactionItems: NotifReaction[] = [];
+      if (myRecords && myRecords.length > 0) {
+        const myRecMap: Record<string, any> = {};
+        myRecords.forEach(r => { myRecMap[r.id] = r; });
+        const myRecIds = myRecords.map(r => r.id);
+
+        const { data: rxs } = await supabase
+          .from("record_reactions")
+          .select("id, record_id, nickname, created_at")
+          .in("record_id", myRecIds)
+          .neq("nickname", myNickname)
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+        reactionItems = (rxs ?? []).map(rx => {
+          const rec = myRecMap[rx.record_id];
+          return {
+            kind: "reaction" as const,
+            id: rx.id,
+            ts: rx.created_at,
+            groupId: rec.group_id,
+            groupName: groupNames[rec.group_id] ?? "그룹",
+            nickname: rx.nickname,
+            recordSituation: rec.situation ?? rec.memo ?? "절약 기록",
+            recordAmount: rec.amount,
+          };
+        });
+      }
 
       const recordItems: NotifRecord[] = (records ?? []).map(r => ({
         kind: "record" as const,
@@ -121,7 +166,7 @@ export default function NotificationsPage() {
           nickname: m.nickname,
         }));
 
-      const combined = [...recordItems, ...memberItems]
+      const combined = [...recordItems, ...memberItems, ...reactionItems]
         .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
 
       setItems(combined);
@@ -176,7 +221,7 @@ export default function NotificationsPage() {
                   <li key={`${n.kind}-${n.id}`} className={`notif-item ${isUnread ? "notif-item--unread" : ""}`}>
                     <Link href={`/group/${n.groupId}`} className="notif-link">
                       <div className="notif-icon">
-                        {n.kind === "record" ? "🐷" : "👋"}
+                        {n.kind === "record" ? "🐷" : n.kind === "member" ? "👋" : "🩷"}
                       </div>
                       <div className="notif-body">
                         <p className="notif-text">
@@ -187,10 +232,16 @@ export default function NotificationsPage() {
                               <strong className="notif-amount">{n.amount.toLocaleString()}원</strong> 절약했어요
                               {n.situation && <span className="notif-sit"> · {n.situation}</span>}
                             </>
-                          ) : (
+                          ) : n.kind === "member" ? (
                             <>
                               <strong>{n.nickname}</strong>님이{" "}
                               <span className="notif-group">{n.groupName}</span>에 새로 참여했어요
+                            </>
+                          ) : (
+                            <>
+                              <strong>{n.nickname}</strong>님이 회원님의{" "}
+                              <strong className="notif-amount">{n.recordAmount.toLocaleString()}원</strong> 절약 기록에 반응했어요 🩷
+                              <span className="notif-sit"> · {n.groupName}</span>
                             </>
                           )}
                         </p>

@@ -291,8 +291,8 @@ export default function HomePage() {
       const earliestJoin = myMemberships
         .reduce((min, m) => m.joined_at < min ? m.joined_at : min, myMemberships[0].joined_at);
 
-      // 친구의 새 기록 (내 그룹 中, 내 것 제외, lastRead 이후)
-      const [{ count: recCount }, { count: memCount }] = await Promise.all([
+      // 친구의 새 기록 / 신규 멤버 / 내 기록 ID (리액션 알림용) 병렬 fetch
+      const [{ count: recCount }, { count: memCount }, { data: myRecs }] = await Promise.all([
         supabase.from("records")
           .select("id", { count: "exact", head: true })
           .in("group_id", groupIds)
@@ -304,9 +304,24 @@ export default function HomePage() {
           .neq("nickname", nickname)
           .gt("joined_at", lastRead)
           .gt("joined_at", earliestJoin),
+        supabase.from("records")
+          .select("id")
+          .in("group_id", groupIds)
+          .eq("nickname", nickname),
       ]);
 
-      setHasUnreadNotif(((recCount ?? 0) + (memCount ?? 0)) > 0);
+      // 내 기록에 달린 새 리액션 (남이 누른 것만)
+      let rxCount = 0;
+      if (myRecs && myRecs.length > 0) {
+        const { count } = await supabase.from("record_reactions")
+          .select("id", { count: "exact", head: true })
+          .in("record_id", myRecs.map(r => r.id))
+          .neq("nickname", nickname)
+          .gt("created_at", lastRead);
+        rxCount = count ?? 0;
+      }
+
+      setHasUnreadNotif(((recCount ?? 0) + (memCount ?? 0) + rxCount) > 0);
     }
 
     checkUnread();

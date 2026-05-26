@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
@@ -12,6 +12,7 @@ interface Record {
   situation: string | null; memo: string; created_at: string;
 }
 interface Group { id: string; name: string; invite_code: string; created_at: string; }
+interface Reaction { id: string; record_id: string; nickname: string; created_at: string; }
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -59,16 +60,38 @@ function PigSketch({ reacted, onClick }: { reacted: boolean; onClick: () => void
   );
 }
 
-function FeedCard({ record: r, isMe }: { record: Record; isMe: boolean }) {
-  const [reacted, setReacted] = useState(false);
+// 클릭 횟수에 따른 돼지 데코레이션
+function PigDecorations({ count }: { count: number }) {
+  return (
+    <>
+      {count >= 1  && <span className="pig-deco pig-deco--heart">🩷</span>}
+      {count >= 3  && <span className="pig-deco pig-deco--star">⭐</span>}
+      {count >= 5  && <span className="pig-deco pig-deco--sparkle">✨</span>}
+      {count >= 10 && <span className="pig-deco pig-deco--dizzy">💫</span>}
+    </>
+  );
+}
+
+function FeedCard({
+  record: r, isMe, count, reacted, onToggle,
+}: {
+  record: Record;
+  isMe: boolean;
+  count: number;
+  reacted: boolean;
+  onToggle: () => void;
+}) {
   const [bubble, setBubble] = useState<string | null>(null);
 
   function handleReact() {
-    if (reacted) { setReacted(false); setBubble(null); return; }
-    const msg = PIG_REACTIONS[Math.floor(Math.random() * PIG_REACTIONS.length)];
-    setReacted(true);
-    setBubble(msg);
-    setTimeout(() => setBubble(null), 2200);
+    onToggle();
+    if (!reacted) {
+      const msg = PIG_REACTIONS[Math.floor(Math.random() * PIG_REACTIONS.length)];
+      setBubble(msg);
+      setTimeout(() => setBubble(null), 2200);
+    } else {
+      setBubble(null);
+    }
   }
 
   return (
@@ -88,7 +111,13 @@ function FeedCard({ record: r, isMe }: { record: Record; isMe: boolean }) {
         </div>
         <div className="feed-card-pig-wrap">
           {bubble && <div className="pig-bubble" key={bubble + Date.now()}>{bubble}</div>}
-          <PigSketch reacted={reacted} onClick={handleReact} />
+          <div className="pig-deco-wrap">
+            <PigDecorations count={count} />
+            <PigSketch reacted={reacted} onClick={handleReact} />
+          </div>
+          <span className={`pig-count ${count > 0 ? "pig-count--active" : ""}`}>
+            🩷 {count}
+          </span>
         </div>
       </div>
     </div>
@@ -98,14 +127,19 @@ function FeedCard({ record: r, isMe }: { record: Record; isMe: boolean }) {
 export default function GroupPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const [group,   setGroup]   = useState<Group | null>(null);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [records, setRecords] = useState<Record[]>([]);
-  const [tab,     setTab]     = useState<"feed" | "stats">("feed");
-  const [loading, setLoading] = useState(true);
-  const [copied,  setCopied]  = useState(false);
+  const [group,     setGroup]     = useState<Group | null>(null);
+  const [members,   setMembers]   = useState<Member[]>([]);
+  const [records,   setRecords]   = useState<Record[]>([]);
+  const [reactions, setReactions] = useState<Reaction[]>([]);
+  const [tab,       setTab]       = useState<"feed" | "stats">("feed");
+  const [loading,   setLoading]   = useState(true);
+  const [copied,    setCopied]    = useState(false);
 
   const myNickname = getProfile()?.nickname ?? "";
+
+  // 현재 records를 ref로 추적 (실시간 구독에서 참조)
+  const recordsRef = useRef<Record[]>([]);
+  useEffect(() => { recordsRef.current = records; }, [records]);
 
   useEffect(() => {
     async function load() {
@@ -120,12 +154,23 @@ export default function GroupPage() {
       setGroup(g);
       setMembers(m ?? []);
       setRecords(r ?? []);
+
+      // 이 그룹의 모든 기록에 대한 리액션 가져오기
+      const recordIds = (r ?? []).map(rec => rec.id);
+      if (recordIds.length > 0) {
+        const { data: reactionsData } = await supabase
+          .from("record_reactions")
+          .select("*")
+          .in("record_id", recordIds);
+        setReactions(reactionsData ?? []);
+      }
+
       setLoading(false);
     }
     load();
 
     // 실시간 새 기록 구독
-    const sub = supabase
+    const recordSub = supabase
       .channel(`group-${id}`)
       .on("postgres_changes", {
         event: "INSERT", schema: "public", table: "records",
@@ -133,8 +178,60 @@ export default function GroupPage() {
       }, payload => setRecords(prev => [payload.new as Record, ...prev]))
       .subscribe();
 
-    return () => { supabase.removeChannel(sub); };
+    // 실시간 리액션 구독 (테이블 전체 구독 후 이 그룹 기록만 필터)
+    const reactionSub = supabase
+      .channel(`reactions-${id}`)
+      .on("postgres_changes", {
+        event: "INSERT", schema: "public", table: "record_reactions",
+      }, payload => {
+        const newRx = payload.new as Reaction;
+        const recordIds = new Set(recordsRef.current.map(r => r.id));
+        if (!recordIds.has(newRx.record_id)) return;
+        setReactions(prev => prev.some(x => x.id === newRx.id) ? prev : [...prev, newRx]);
+      })
+      .on("postgres_changes", {
+        event: "DELETE", schema: "public", table: "record_reactions",
+      }, payload => {
+        const oldRx = payload.old as Reaction;
+        setReactions(prev => prev.filter(x => x.id !== oldRx.id));
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(recordSub);
+      supabase.removeChannel(reactionSub);
+    };
   }, [id]);
+
+  // 리액션 토글: 이미 했으면 삭제, 아니면 추가
+  async function toggleReaction(recordId: string) {
+    if (!myNickname) return;
+    const existing = reactions.find(r => r.record_id === recordId && r.nickname === myNickname);
+
+    if (existing) {
+      // optimistic remove
+      setReactions(prev => prev.filter(r => r.id !== existing.id));
+      await supabase.from("record_reactions").delete().eq("id", existing.id);
+    } else {
+      // optimistic add
+      const tempId = `tmp-${Date.now()}`;
+      setReactions(prev => [...prev, {
+        id: tempId, record_id: recordId, nickname: myNickname,
+        created_at: new Date().toISOString(),
+      }]);
+      const { data, error } = await supabase
+        .from("record_reactions")
+        .insert({ record_id: recordId, nickname: myNickname })
+        .select()
+        .single();
+      if (error) {
+        // 롤백
+        setReactions(prev => prev.filter(r => r.id !== tempId));
+      } else if (data) {
+        setReactions(prev => prev.map(r => r.id === tempId ? (data as Reaction) : r));
+      }
+    }
+  }
 
   const memberStats = members.map(m => ({
     nickname: m.nickname,
@@ -204,9 +301,19 @@ export default function GroupPage() {
               </div>
             ) : (
               <div className="feed-list">
-                {records.map(r => (
-                  <FeedCard key={r.id} record={r} isMe={r.nickname === myNickname} />
-                ))}
+                {records.map(r => {
+                  const recRx = reactions.filter(x => x.record_id === r.id);
+                  return (
+                    <FeedCard
+                      key={r.id}
+                      record={r}
+                      isMe={r.nickname === myNickname}
+                      count={recRx.length}
+                      reacted={recRx.some(x => x.nickname === myNickname)}
+                      onToggle={() => toggleReaction(r.id)}
+                    />
+                  );
+                })}
               </div>
             )
           ) : (
@@ -359,6 +466,33 @@ const css = `
     100% { transform: scale(1); }
   }
   .pig-btn--reacted { animation: pig-pop 0.38s cubic-bezier(0.34,1.56,0.64,1); }
+
+  /* 돼지 + 데코레이션 묶음 */
+  .pig-deco-wrap {
+    position: relative; display: inline-block;
+  }
+  .pig-deco {
+    position: absolute; pointer-events: none;
+    font-size: 16px; line-height: 1;
+    animation: deco-pop 0.45s cubic-bezier(0.34,1.56,0.64,1);
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.08));
+  }
+  .pig-deco--heart   { top: -4px;  left: -6px;  font-size: 16px; }
+  .pig-deco--star    { top: -6px;  right: -4px; font-size: 15px; animation-delay: 0.05s; }
+  .pig-deco--sparkle { bottom: -2px; right: -8px; font-size: 14px; animation-delay: 0.1s; }
+  .pig-deco--dizzy   { bottom: -2px; left: -8px; font-size: 14px; animation-delay: 0.15s; }
+  @keyframes deco-pop {
+    from { opacity: 0; transform: scale(0) rotate(-30deg); }
+    to   { opacity: 1; transform: scale(1) rotate(0); }
+  }
+
+  /* 클릭 카운트 표시 */
+  .pig-count {
+    margin-top: 6px; font-size: 11px; font-weight: 600;
+    color: #BBBBBB; letter-spacing: -0.01em;
+    transition: color 0.2s;
+  }
+  .pig-count--active { color: #FF2A7A; }
 
   /* ── 말풍선 (피그마: #FFDBDD, 아래 삼각형) ── */
   @keyframes bubble-fade {
