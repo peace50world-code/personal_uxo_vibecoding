@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, backfillTodayRecords } from "@/lib/supabase";
 import { getProfile } from "../../onboarding/page";
 
 interface Group { id: string; name: string; invite_code: string; }
@@ -54,6 +54,8 @@ export default function JoinPage() {
     }
 
     await supabase.from("group_members").insert({ group_id: group.id, nickname });
+    // 가입 당일 로컬에 기록된 절약 내역을 그룹에 합쳐주기
+    await backfillTodayRecords(group.id, nickname);
     setStatus("done");
     setTimeout(() => router.replace(`/group/${group.id}`), 1200);
   }

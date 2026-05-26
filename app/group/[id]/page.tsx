@@ -233,9 +233,13 @@ export default function GroupPage() {
     }
   }
 
+  // 그룹 통계/피드는 '오늘'만 보여주고 자정에 자동 리셋
+  const todayStr = new Date().toDateString();
+  const todayRecords = records.filter(r => new Date(r.created_at).toDateString() === todayStr);
+
   const memberStats = members.map(m => ({
     nickname: m.nickname,
-    total: records.filter(r => r.nickname === m.nickname).reduce((s, r) => s + r.amount, 0),
+    total: todayRecords.filter(r => r.nickname === m.nickname).reduce((s, r) => s + r.amount, 0),
   })).sort((a, b) => b.total - a.total);
 
   function copyCode() {
@@ -293,15 +297,15 @@ export default function GroupPage() {
         {/* 콘텐츠 */}
         <main className="content">
           {tab === "feed" ? (
-            records.length === 0 ? (
+            todayRecords.length === 0 ? (
               <div className="empty-state">
                 <p className="empty-icon">🐷</p>
-                <p className="empty-title">아직 기록이 없어요</p>
-                <p className="empty-sub">홈에서 절약 기록을 추가해보세요!</p>
+                <p className="empty-title">오늘 기록이 아직 없어요</p>
+                <p className="empty-sub">그룹 통계는 매일 자정에 리셋돼요.<br/>홈에서 오늘의 절약을 기록해보세요!</p>
               </div>
             ) : (
               <div className="feed-list">
-                {records.map(r => {
+                {todayRecords.map(r => {
                   const recRx = reactions.filter(x => x.record_id === r.id);
                   return (
                     <FeedCard
@@ -318,10 +322,11 @@ export default function GroupPage() {
             )
           ) : (
             <div className="stats-list">
-              {memberStats.length === 0 ? (
+              {todayRecords.length === 0 ? (
                 <div className="empty-state">
                   <p className="empty-icon">📊</p>
-                  <p className="empty-title">아직 기록이 없어요</p>
+                  <p className="empty-title">오늘 기록이 아직 없어요</p>
+                  <p className="empty-sub">그룹 통계는 매일 자정에 리셋돼요</p>
                 </div>
               ) : (
                 memberStats.map((m, i) => (

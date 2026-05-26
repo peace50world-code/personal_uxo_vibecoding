@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { supabase, generateInviteCode } from "@/lib/supabase";
+import { supabase, generateInviteCode, backfillTodayRecords } from "@/lib/supabase";
 import { getProfile } from "../onboarding/page";
 
 interface PiggyGroup {
@@ -145,6 +145,8 @@ export default function FriendsPage() {
     if (gErr || !group) { setError("그룹 생성에 실패했어요."); setSaving(false); return; }
 
     await supabase.from("group_members").insert({ group_id: group.id, nickname });
+    // 가입 당일 로컬에 기록된 절약 내역을 그룹에 합쳐주기
+    await backfillTodayRecords(group.id, nickname);
 
     setSaving(false);
     setDone(true);
@@ -180,6 +182,8 @@ export default function FriendsPage() {
     if (already) { setError("이미 참가한 그룹이에요!"); setSaving(false); return; }
 
     await supabase.from("group_members").insert({ group_id: group.id, nickname });
+    // 가입 당일 로컬에 기록된 절약 내역을 그룹에 합쳐주기
+    await backfillTodayRecords(group.id, nickname);
 
     setSaving(false);
     setDone(true);
