@@ -3,7 +3,10 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { supabase } from "@/lib/supabase";
 import { getProfile, isLoggedIn } from "./onboarding/page";
+
+const NOTIF_LAST_READ_KEY = "piggy-notif-last-read";
 
 // ─── 공유 데이터 타입 ─────────────────────────────────
 export interface PiggyRecord {
@@ -250,6 +253,7 @@ export default function HomePage() {
   const [ready,   setReady]   = useState(false);
   const [records, setRecords] = useState<PiggyRecord[]>([]);
   const [nickname, setNickname] = useState("");
+  const [hasUnreadNotif, setHasUnreadNotif] = useState(false);
 
   // 인증 가드 + 데이터 로드
   useEffect(() => {
@@ -266,6 +270,49 @@ export default function HomePage() {
     window.addEventListener("focus", load);
     return () => window.removeEventListener("focus", load);
   }, [router]);
+
+  // 미확인 알림 여부 체크 (홈 진입 / 포커스 복귀 시)
+  useEffect(() => {
+    if (!nickname) return;
+
+    async function checkUnread() {
+      const lastRead = localStorage.getItem(NOTIF_LAST_READ_KEY) ?? new Date(0).toISOString();
+
+      // 내 그룹 + 가입 시점 가져오기
+      const { data: myMemberships } = await supabase
+        .from("group_members")
+        .select("group_id, joined_at")
+        .eq("nickname", nickname);
+      if (!myMemberships || myMemberships.length === 0) { setHasUnreadNotif(false); return; }
+
+      const groupIds = myMemberships.map(m => m.group_id);
+
+      // 내가 가장 일찍 가입한 시각 (그 이전 멤버는 신규 가입 알림 대상 아님)
+      const earliestJoin = myMemberships
+        .reduce((min, m) => m.joined_at < min ? m.joined_at : min, myMemberships[0].joined_at);
+
+      // 친구의 새 기록 (내 그룹 中, 내 것 제외, lastRead 이후)
+      const [{ count: recCount }, { count: memCount }] = await Promise.all([
+        supabase.from("records")
+          .select("id", { count: "exact", head: true })
+          .in("group_id", groupIds)
+          .neq("nickname", nickname)
+          .gt("created_at", lastRead),
+        supabase.from("group_members")
+          .select("id", { count: "exact", head: true })
+          .in("group_id", groupIds)
+          .neq("nickname", nickname)
+          .gt("joined_at", lastRead)
+          .gt("joined_at", earliestJoin),
+      ]);
+
+      setHasUnreadNotif(((recCount ?? 0) + (memCount ?? 0)) > 0);
+    }
+
+    checkUnread();
+    window.addEventListener("focus", checkUnread);
+    return () => window.removeEventListener("focus", checkUnread);
+  }, [nickname]);
 
   if (!ready) return null;
 
@@ -291,14 +338,14 @@ export default function HomePage() {
         <header className="gnb">
           <span className="gnb-logo">참으면돼지</span>
           <div className="gnb-right">
-            <button className="gnb-icon-btn" aria-label="알림">
-              <span className="notif-dot" />
+            <Link href="/notifications" className="gnb-icon-btn" aria-label="알림">
+              {hasUnreadNotif && <span className="notif-dot" />}
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
                 <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
               </svg>
-            </button>
+            </Link>
             <Link href="/profile" className="gnb-icon-btn" aria-label="프로필">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
