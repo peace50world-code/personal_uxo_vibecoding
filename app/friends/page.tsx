@@ -12,6 +12,8 @@ interface PiggyGroup {
   invite_code: string;
   created_at: string;
   member_count?: number;
+  last_update_at?: string | null;
+  last_updater?: string | null;
 }
 
 type ModalMode = "create" | "join" | "invite";
@@ -19,15 +21,17 @@ type ModalMode = "create" | "join" | "invite";
 // 모듈 레벨 캐시 — 컴포넌트가 언마운트돼도 유지됨
 let _groupsCache: PiggyGroup[] | null = null;
 
-function formatDate(iso: string): string {
+function formatRelative(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
   const diffMin = Math.floor((now.getTime() - d.getTime()) / 60000);
-  if (diffMin < 1)  return "방금 생성";
-  if (diffMin < 60) return `${diffMin}분 전 생성`;
+  if (diffMin < 1)  return "방금 전";
+  if (diffMin < 60) return `${diffMin}분 전`;
   const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24)   return `${diffH}시간 전 생성`;
-  return `${d.getMonth() + 1}월 ${d.getDate()}일 생성`;
+  if (diffH < 24)   return `${diffH}시간 전`;
+  const diffD = Math.floor(diffH / 24);
+  if (diffD < 7)    return `${diffD}일 전`;
+  return `${d.getMonth() + 1}월 ${d.getDate()}일`;
 }
 
 export default function FriendsPage() {
@@ -65,23 +69,44 @@ export default function FriendsPage() {
 
     const groupIds = myMemberships.map(r => r.group_id);
 
-    // 쿼리 2: 전체 멤버 목록을 한 번에 가져와서 로컬에서 카운트
-    const { data: allMembers } = await supabase
-      .from("group_members")
-      .select("group_id")
-      .in("group_id", groupIds);
+    // 쿼리 2 + 3: 멤버 목록 / 최신 기록 병렬 fetch
+    const [{ data: allMembers }, { data: allRecords }] = await Promise.all([
+      supabase.from("group_members").select("group_id").in("group_id", groupIds),
+      supabase.from("records")
+        .select("group_id, nickname, created_at")
+        .in("group_id", groupIds)
+        .order("created_at", { ascending: false }),
+    ]);
 
     const countMap: Record<string, number> = {};
     (allMembers ?? []).forEach(m => {
       countMap[m.group_id] = (countMap[m.group_id] ?? 0) + 1;
     });
 
+    // 각 그룹의 최신 기록 1건 (records는 created_at 내림차순)
+    const latestMap: Record<string, { nickname: string; created_at: string }> = {};
+    (allRecords ?? []).forEach(r => {
+      if (!latestMap[r.group_id]) {
+        latestMap[r.group_id] = { nickname: r.nickname, created_at: r.created_at };
+      }
+    });
+
     const groups = myMemberships
-      .map(r => ({
-        ...(r.groups as any),
-        member_count: countMap[r.group_id] ?? 1,
-      }))
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      .map(r => {
+        const latest = latestMap[r.group_id];
+        return {
+          ...(r.groups as any),
+          member_count: countMap[r.group_id] ?? 1,
+          last_update_at: latest?.created_at ?? null,
+          last_updater:   latest?.nickname   ?? null,
+        };
+      })
+      // 최근 업데이트가 있는 그룹을 우선, 동률이면 생성시각순
+      .sort((a, b) => {
+        const aTs = a.last_update_at ?? a.created_at;
+        const bTs = b.last_update_at ?? b.created_at;
+        return new Date(bTs).getTime() - new Date(aTs).getTime();
+      });
 
     _groupsCache = groups;
     setGroups(groups);
@@ -232,7 +257,11 @@ export default function FriendsPage() {
                           <span className="group-name">{g.name}</span>
                           <span className="group-member-count">{g.member_count}</span>
                         </div>
-                        <span className="group-last">{formatDate(g.created_at)}</span>
+                        <span className="group-last">
+                          {g.last_update_at && g.last_updater
+                            ? `${formatRelative(g.last_update_at)} · ${g.last_updater}님 업데이트`
+                            : "아직 기록이 없어요"}
+                        </span>
                       </div>
                     </div>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
