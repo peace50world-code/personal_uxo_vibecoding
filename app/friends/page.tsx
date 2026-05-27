@@ -195,7 +195,7 @@ export default function FriendsPage() {
 
   function handleShare(group: PiggyGroup) {
     const url  = `${APP_URL}/join/${group.invite_code}`;
-    const text = `🐷 사소하게 아낀 돈, 모으면 얼마가 될까요? 참은 소비를 기록하고 저금통을 채워보세요!\n'${nickname}'님이 '${group.name}'에 초대합니다\n\n파티 코드 : ${group.invite_code}\n${url}`;
+    const text = `🐷 참으면 돼지\n사소하게 아낀 돈, 모으면 얼마가 될까요? 참은 소비를 기록하고 저금통을 채워보세요!\n\n'${nickname}'님이 '${group.name}'에 초대합니다\n파티 코드 : ${group.invite_code}\n${url}`;
 
     if (typeof navigator !== "undefined" && navigator.share) {
       navigator.share({ title: `${group.name} 그룹 초대`, text }).catch(() => {});
