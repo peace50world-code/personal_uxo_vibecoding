@@ -73,7 +73,7 @@ export default function JoinPage() {
       <div className="join-shell">
         <div className="join-top">
           <div className="join-pig">🐷</div>
-          <h1 className="join-app">참아낸다이어</h1>
+          <h1 className="join-app">참으면돼지</h1>
           <p className="join-sub">절약 챌린지 그룹 초대</p>
         </div>
 
